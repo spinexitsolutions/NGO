@@ -62,7 +62,7 @@ export async function sendTemplate(opts: SendOptions): Promise<boolean> {
     return false;
   }
   const [settings, theme] = await Promise.all([getPublished('settings'), getPublished('theme')]);
-  const vars = { orgName: settings.organization.name, ...opts.vars };
+  const vars: Record<string, string> = { orgName: settings.organization.name, ...opts.vars };
   const subject = renderTemplate(tpl.subject, vars, false).replace(/[\r\n]+/g, ' ').slice(0, 200);
   const unsubscribe = tpl.isMarketing && vars.unsubscribeUrl
     ? `<br><a href="${escapeHtml(vars.unsubscribeUrl)}" style="color:#6b706c">Unsubscribe</a>`
