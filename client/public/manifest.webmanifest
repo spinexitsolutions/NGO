@@ -1,0 +1,9 @@
+{
+  "name": "NGO",
+  "short_name": "NGO",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8F5ED",
+  "theme_color": "#164B3A",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
