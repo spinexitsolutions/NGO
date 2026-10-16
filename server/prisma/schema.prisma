@@ -1,0 +1,1165 @@
+// NGO platform database schema (PostgreSQL).
+// Money is always stored as integer minor units (paise for INR) in `Int` columns.
+// Donation totals are computed from Donation rows with status SUCCESS — never from editable fields.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Identity & access ────────────────────────────────────────────────────────────
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String
+  passwordHash     String
+  roleId           String
+  role             Role      @relation(fields: [roleId], references: [id])
+  isActive         Boolean   @default(true)
+  mfaEnabled       Boolean   @default(false)
+  mfaSecret        String? // base32 TOTP secret (encrypted at rest with APP_ENCRYPTION_KEY)
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  passwordChangedAt DateTime @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  sessions       Session[]
+  resetTokens    PasswordResetToken[]
+  auditLogs      AuditLog[]
+  notifications  Notification[]
+  notes          InternalNote[]
+  mediaUploaded  MediaAsset[]
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  name        String
+  description String           @default("")
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  users       User[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  key         String           @id
+  group       String
+  description String
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId        String
+  permissionKey String
+  role          Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique // sha256 of the opaque cookie token
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mfaPending Boolean   @default(false) // password ok, waiting for TOTP
+  userAgent  String    @default("")
+  ip         String    @default("")
+  expiresAt  DateTime
+  lastSeenAt DateTime  @default(now())
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ─── Site configuration (theme, settings, navigation) ────────────────────────────
+
+/// One row per configuration document: key = "theme" | "settings" | "navigation".
+/// The public site renders `published`; admins edit `draft` and publish it.
+model ConfigDocument {
+  key            String   @id
+  draft          Json
+  published      Json
+  version        Int      @default(1)
+  draftUpdatedAt DateTime @default(now())
+  publishedAt    DateTime @default(now())
+  updatedById    String?
+  versions       ConfigVersion[]
+}
+
+model ConfigVersion {
+  id          String         @id @default(cuid())
+  key         String
+  config      ConfigDocument @relation(fields: [key], references: [key], onDelete: Cascade)
+  version     Int
+  data        Json
+  note        String         @default("")
+  createdById String?
+  createdAt   DateTime       @default(now())
+
+  @@unique([key, version])
+}
+
+/// Global counter used for content cache-busting and sequential numbers (receipts).
+model Counter {
+  key   String @id
+  value Int    @default(0)
+}
+
+// ─── Pages & media ────────────────────────────────────────────────────────────────
+
+enum PageStatus {
+  DRAFT
+  PUBLISHED
+  SCHEDULED
+  ARCHIVED
+}
+
+model Page {
+  id                 String        @id @default(cuid())
+  slug               String        @unique
+  isSystem           Boolean       @default(false) // system pages cannot be deleted or re-slugged
+  status             PageStatus    @default(DRAFT)
+  draft              Json // { title, seo, sections[] }
+  showInSitemap      Boolean       @default(true)
+  scheduledAt        DateTime?
+  publishedVersionId String?       @unique
+  publishedVersion   PageVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
+  versions           PageVersion[] @relation("PageVersions")
+  updatedById        String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+}
+
+model PageVersion {
+  id          String   @id @default(cuid())
+  pageId      String
+  page        Page     @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
+  version     Int
+  data        Json // validated { title, seo, sections[] }
+  note        String   @default("")
+  createdById String?
+  createdAt   DateTime @default(now())
+  publishedOf Page?    @relation("PublishedVersion")
+
+  @@unique([pageId, version])
+}
+
+/// Reusable section presets that editors can insert into any page.
+model SectionTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  type      String
+  section   Json
+  createdAt DateTime @default(now())
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+  DOCUMENT
+}
+
+model MediaAsset {
+  id           String    @id @default(cuid())
+  kind         MediaKind
+  provider     String // "local" | "cloudinary"
+  storageKey   String    @unique
+  url          String
+  variants     Json      @default("{}") // { "640": url, "1280": url, ... }
+  folder       String    @default("general")
+  filename     String
+  mimeType     String
+  size         Int
+  width        Int?
+  height       Int?
+  alt          String    @default("")
+  caption      String    @default("")
+  uploadedById String?
+  uploadedBy   User?     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([kind, folder])
+  @@index([createdAt])
+}
+
+// ─── Content collections ─────────────────────────────────────────────────────────
+
+enum PublishStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Cause {
+  id             String        @id @default(cuid())
+  slug           String        @unique
+  title          String
+  summary        String
+  body           String        @default("")
+  icon           String        @default("HeartHandshake")
+  coverImage     String
+  coverAlt       String        @default("")
+  gallery        String[]      @default([])
+  goals          String[]      @default([])
+  activities     String[]      @default([])
+  outcomes       String[]      @default([])
+  sortOrder      Int?          @default(0)
+  seoTitle       String        @default("")
+  seoDescription String        @default("")
+  status         PublishStatus @default(DRAFT)
+  isSample       Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  campaigns Campaign[]
+  projects  Project[]
+  stories   Story[]
+  donations Donation[]
+  recurring RecurringDonation[]
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+model Campaign {
+  id               String         @id @default(cuid())
+  slug             String         @unique
+  title            String
+  summary          String
+  body             String         @default("")
+  coverImage       String
+  coverAlt         String         @default("")
+  gallery          String[]       @default([])
+  causeId          String?
+  cause            Cause?         @relation(fields: [causeId], references: [id], onDelete: SetNull)
+  goalAmount       Int
+  currency         String         @default("INR")
+  suggestedAmounts String[]       @default([])
+  startDate        DateTime
+  endDate          DateTime?
+  isFeatured       Boolean        @default(false)
+  milestones       Json           @default("[]")
+  seoTitle         String         @default("")
+  seoDescription   String         @default("")
+  status           CampaignStatus @default(DRAFT)
+  isSample         Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  updates   CampaignUpdate[]
+  donations Donation[]
+  projects  Project[]
+  events    Event[]
+  recurring RecurringDonation[]
+
+  @@index([status, startDate])
+}
+
+model CampaignUpdate {
+  id          String        @id @default(cuid())
+  campaignId  String
+  campaign    Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  title       String
+  body        String
+  image       String        @default("")
+  publishedAt DateTime      @default(now())
+  status      PublishStatus @default(DRAFT)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([campaignId, publishedAt])
+}
+
+enum ProjectPhase {
+  PLANNED
+  ONGOING
+  COMPLETED
+}
+
+model Project {
+  id                    String        @id @default(cuid())
+  slug                  String        @unique
+  title                 String
+  summary               String
+  body                  String        @default("")
+  coverImage            String
+  coverAlt              String        @default("")
+  gallery               String[]      @default([])
+  videoUrl              String        @default("")
+  causeId               String?
+  cause                 Cause?        @relation(fields: [causeId], references: [id], onDelete: SetNull)
+  campaignId            String?
+  campaign              Campaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  phase                 ProjectPhase  @default(ONGOING)
+  location              String        @default("")
+  startDate             DateTime
+  endDate               DateTime?
+  objectives            String[]      @default([])
+  activities            String[]      @default([])
+  outcomes              String[]      @default([])
+  beneficiariesReached  Int?
+  beneficiariesVerified Boolean       @default(false)
+  budgetAmount          Int?
+  fundingSecured        Int?
+  showBudget            Boolean       @default(false)
+  seoTitle              String        @default("")
+  seoDescription        String        @default("")
+  status                PublishStatus @default(DRAFT)
+  isSample              Boolean       @default(false)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  reports       ProjectReport[]
+  stories       Story[]
+  opportunities VolunteerOpportunity[]
+  assignments   VolunteerAssignment[]
+  beneficiaries Beneficiary[]
+  assistance    AssistanceRecord[]
+
+  @@index([status, startDate])
+}
+
+enum ProjectReportKind {
+  UPDATE
+  REPORT
+}
+
+model ProjectReport {
+  id          String            @id @default(cuid())
+  projectId   String
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title       String
+  kind        ProjectReportKind @default(UPDATE)
+  body        String
+  image       String            @default("")
+  fileUrl     String            @default("")
+  publishedAt DateTime          @default(now())
+  status      PublishStatus     @default(DRAFT)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([projectId, publishedAt])
+}
+
+model Story {
+  id              String        @id @default(cuid())
+  slug            String        @unique
+  title           String
+  excerpt         String
+  body            String
+  image           String
+  imageAlt        String        @default("")
+  personName      String        @default("")
+  location        String        @default("")
+  causeId         String?
+  cause           Cause?        @relation(fields: [causeId], references: [id], onDelete: SetNull)
+  projectId       String?
+  project         Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  anonymized      Boolean       @default(false)
+  consentObtained Boolean       @default(false)
+  consentNotes    String        @default("")
+  publishedAt     DateTime?
+  seoTitle        String        @default("")
+  seoDescription  String        @default("")
+  status          PublishStatus @default(DRAFT)
+  isSample        Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+model Testimonial {
+  id              String        @id @default(cuid())
+  quote           String
+  author          String
+  role            String        @default("")
+  photo           String        @default("")
+  consentObtained Boolean       @default(false)
+  sortOrder       Int?          @default(0)
+  status          PublishStatus @default(DRAFT)
+  isSample        Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+enum TeamGroup {
+  LEADERSHIP
+  FOUNDER
+  BOARD
+  ADVISOR
+  STAFF
+}
+
+model TeamMember {
+  id          String        @id @default(cuid())
+  name        String
+  title       String
+  group       TeamGroup     @default(STAFF)
+  bio         String        @default("")
+  photo       String        @default("")
+  linkedinUrl String        @default("")
+  sortOrder   Int?          @default(0)
+  status      PublishStatus @default(DRAFT)
+  isSample    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+enum PartnerType {
+  CORPORATE
+  INSTITUTIONAL
+  CSR
+  GOVERNMENT
+  NGO
+}
+
+model Partner {
+  id          String        @id @default(cuid())
+  name        String
+  type        PartnerType   @default(CORPORATE)
+  logo        String        @default("")
+  url         String        @default("")
+  description String        @default("")
+  sortOrder   Int?          @default(0)
+  status      PublishStatus @default(DRAFT)
+  isSample    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model ImpactStat {
+  id         String        @id @default(cuid())
+  label      String
+  value      Float
+  prefix     String        @default("")
+  suffix     String        @default("")
+  icon       String        @default("Sparkles")
+  source     String        @default("")
+  isVerified Boolean       @default(false)
+  sortOrder  Int?          @default(0)
+  status     PublishStatus @default(DRAFT)
+  isSample   Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+}
+
+model Faq {
+  id        String        @id @default(cuid())
+  question  String
+  answer    String
+  category  String        @default("")
+  sortOrder Int?          @default(0)
+  status    PublishStatus @default(DRAFT)
+  isSample  Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+}
+
+enum DocumentType {
+  ANNUAL_REPORT
+  FINANCIAL_STATEMENT
+  AUDIT_REPORT
+  IMPACT_REPORT
+  POLICY
+  REGISTRATION
+}
+
+model Document {
+  id          String        @id @default(cuid())
+  title       String
+  type        DocumentType  @default(ANNUAL_REPORT)
+  year        String        @default("")
+  description String        @default("")
+  fileUrl     String
+  coverImage  String        @default("")
+  status      PublishStatus @default(DRAFT)
+  isSample    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model GalleryAlbum {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  title       String
+  description String        @default("")
+  coverImage  String        @default("")
+  items       Json          @default("[]") // [{ url, alt, caption }]
+  sortOrder   Int?          @default(0)
+  status      PublishStatus @default(DRAFT)
+  isSample    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+enum JobType {
+  JOB
+  INTERNSHIP
+  FELLOWSHIP
+}
+
+model JobOpening {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  title       String
+  type        JobType       @default(JOB)
+  location    String        @default("")
+  summary     String
+  description String
+  deadline    DateTime?
+  status      PublishStatus @default(DRAFT)
+  isSample    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model Category {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  name        String
+  description String        @default("")
+  status      PublishStatus @default(PUBLISHED)
+  isSample    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  posts       BlogPost[]
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+model BlogPost {
+  id             String     @id @default(cuid())
+  slug           String     @unique
+  title          String
+  excerpt        String
+  body           String
+  coverImage     String
+  coverAlt       String     @default("")
+  authorName     String     @default("")
+  categoryId     String?
+  category       Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  tags           String[]   @default([])
+  publishedAt    DateTime?
+  seoTitle       String     @default("")
+  seoDescription String     @default("")
+  status         PostStatus @default(DRAFT)
+  isSample       Boolean    @default(false)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([tags], type: Gin)
+}
+
+// ─── Events ────────────────────────────────────────────────────────────────────────
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  ARCHIVED
+}
+
+model Event {
+  id               String      @id @default(cuid())
+  slug             String      @unique
+  title            String
+  summary          String
+  body             String      @default("")
+  coverImage       String
+  coverAlt         String      @default("")
+  gallery          String[]    @default([])
+  startsAt         DateTime
+  endsAt           DateTime?
+  venue            String      @default("")
+  address          String      @default("")
+  mapUrl           String      @default("")
+  capacity         Int?
+  registrationOpen Boolean     @default(true)
+  volunteerSlots   Int?        @default(0)
+  isFundraiser     Boolean     @default(false)
+  campaignId       String?
+  campaign         Campaign?   @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  cancellationNote String      @default("")
+  materials        Json        @default("[]")
+  seoTitle         String      @default("")
+  seoDescription   String      @default("")
+  status           EventStatus @default(DRAFT)
+  isSample         Boolean     @default(false)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  registrations EventRegistration[]
+  opportunities VolunteerOpportunity[]
+  assignments   VolunteerAssignment[]
+  donations     Donation[]
+
+  @@index([status, startsAt])
+}
+
+enum RegistrationType {
+  ATTENDEE
+  VOLUNTEER
+}
+
+enum RegistrationStatus {
+  CONFIRMED
+  WAITLISTED
+  CANCELLED
+}
+
+model EventRegistration {
+  id          String             @id @default(cuid())
+  reference   String             @unique
+  eventId     String
+  event       Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name        String
+  email       String
+  phone       String             @default("")
+  type        RegistrationType   @default(ATTENDEE)
+  guests      Int                @default(0)
+  status      RegistrationStatus @default(CONFIRMED)
+  attended    Boolean            @default(false)
+  checkedInAt DateTime?
+  cancelToken String             @unique // hashed token for self-service cancellation
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([eventId, email, type])
+  @@index([eventId, status])
+}
+
+// ─── Donations & payments ─────────────────────────────────────────────────────────
+
+model Donor {
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  name               String
+  phone              String    @default("")
+  pan                String    @default("") // only collected when enabled for tax receipts
+  address            String    @default("")
+  marketingOptIn     Boolean   @default(false)
+  marketingConsentAt DateTime?
+  doNotContact       Boolean   @default(false)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  donations   Donation[]
+  recurring   RecurringDonation[]
+  loginTokens DonorLoginToken[]
+}
+
+/// Passwordless (magic link) login for the donor portal.
+model DonorLoginToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  donorId   String
+  donor     Donor     @relation(fields: [donorId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+enum DonationStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+enum DonationFrequency {
+  ONE_TIME
+  MONTHLY
+}
+
+enum PaymentMethod {
+  ONLINE
+  BANK_TRANSFER
+  UPI
+  CHEQUE
+  CASH
+  OTHER
+}
+
+model Donation {
+  id                String            @id @default(cuid())
+  reference         String            @unique
+  donorId           String
+  donor             Donor             @relation(fields: [donorId], references: [id])
+  amount            Int // minor units
+  currency          String            @default("INR")
+  refundedAmount    Int               @default(0)
+  frequency         DonationFrequency @default(ONE_TIME)
+  status            DonationStatus    @default(PENDING)
+  method            PaymentMethod     @default(ONLINE)
+  isOffline         Boolean           @default(false)
+  isAnonymous       Boolean           @default(false)
+  message           String            @default("")
+  campaignId        String?
+  campaign          Campaign?         @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  causeId           String?
+  cause             Cause?            @relation(fields: [causeId], references: [id], onDelete: SetNull)
+  eventId           String?
+  event             Event?            @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  recurringId       String?
+  recurring         RecurringDonation? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  provider          String            @default("") // "razorpay" | "sandbox" | "" (offline)
+  providerOrderId   String?           @unique
+  providerPaymentId String?           @unique
+  offlineReference  String            @default("") // cheque no., bank UTR, etc.
+  failureReason     String            @default("")
+  utmSource         String            @default("")
+  utmMedium         String            @default("")
+  utmCampaign       String            @default("")
+  referrer          String            @default("")
+  recordedById      String? // staff member who recorded an offline donation
+  isSample          Boolean           @default(false)
+  paidAt            DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  transactions PaymentTransaction[]
+  refunds      Refund[]
+  receipts     Receipt[]
+
+  @@index([status, paidAt])
+  @@index([campaignId, status])
+  @@index([causeId, status])
+  @@index([donorId])
+  @@index([createdAt])
+}
+
+enum RecurringStatus {
+  CREATED
+  ACTIVE
+  HALTED
+  CANCELLED
+  COMPLETED
+}
+
+model RecurringDonation {
+  id                     String          @id @default(cuid())
+  reference              String          @unique
+  donorId                String
+  donor                  Donor           @relation(fields: [donorId], references: [id])
+  amount                 Int
+  currency               String          @default("INR")
+  campaignId             String?
+  campaign               Campaign?       @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  causeId                String?
+  cause                  Cause?          @relation(fields: [causeId], references: [id], onDelete: SetNull)
+  provider               String
+  providerPlanId         String          @default("")
+  providerSubscriptionId String          @unique
+  status                 RecurringStatus @default(CREATED)
+  isAnonymous            Boolean         @default(false)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  donations              Donation[]
+}
+
+/// Append-only ledger of everything the payment provider told us about a donation.
+model PaymentTransaction {
+  id         String   @id @default(cuid())
+  donationId String
+  donation   Donation @relation(fields: [donationId], references: [id], onDelete: Cascade)
+  provider   String
+  type       String // ORDER_CREATED | PAYMENT_VERIFIED | PAYMENT_CAPTURED | PAYMENT_FAILED | REFUND_CREATED | OFFLINE_RECORDED
+  providerRef String  @default("")
+  amount     Int
+  status     String
+  raw        Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([donationId])
+}
+
+/// Every webhook delivery we accept is stored once; the unique key makes processing idempotent.
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  provider    String
+  eventId     String
+  type        String
+  payload     Json
+  status      String    @default("RECEIVED") // RECEIVED | PROCESSED | IGNORED | FAILED
+  error       String    @default("")
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([provider, eventId])
+}
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSED
+  FAILED
+}
+
+model Refund {
+  id               String       @id @default(cuid())
+  donationId       String
+  donation         Donation     @relation(fields: [donationId], references: [id], onDelete: Cascade)
+  amount           Int
+  reason           String
+  status           RefundStatus @default(REQUESTED)
+  providerRefundId String?      @unique
+  createdById      String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+}
+
+enum ReceiptStatus {
+  ISSUED
+  VOIDED
+}
+
+model Receipt {
+  id             String        @id @default(cuid())
+  receiptNumber  String        @unique
+  donationId     String
+  donation       Donation      @relation(fields: [donationId], references: [id], onDelete: Cascade)
+  status         ReceiptStatus @default(ISSUED)
+  snapshot       Json // donor, amount and organisation details as printed at issue time
+  issuedAt       DateTime      @default(now())
+  emailedAt      DateTime?
+  voidedAt       DateTime?
+  voidReason     String        @default("")
+  voidedById     String?
+  replacesId     String?       @unique // correction: new receipt replacing a voided one
+  replaces       Receipt?      @relation("ReceiptCorrection", fields: [replacesId], references: [id])
+  replacedBy     Receipt?      @relation("ReceiptCorrection")
+  createdAt      DateTime      @default(now())
+
+  @@index([donationId])
+}
+
+// ─── Volunteers ───────────────────────────────────────────────────────────────────
+
+model VolunteerProfile {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  name              String
+  phone             String
+  city              String
+  dateOfBirth       DateTime?
+  occupation        String    @default("")
+  interests         String[]  @default([])
+  skills            String[]  @default([])
+  experience        String    @default("")
+  availability      String
+  hoursPerWeek      Int?
+  preferredLocation String    @default("")
+  emergencyContact  String    @default("")
+  resumeKey         String? // private storage key, streamed only to authorised staff
+  roleTitle         String    @default("")
+  status            String    @default("APPLICANT") // APPLICANT | ACTIVE | INACTIVE
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  applications VolunteerApplication[]
+  assignments  VolunteerAssignment[]
+  hours        VolunteerHours[]
+}
+
+model VolunteerOpportunity {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  title       String
+  summary     String
+  description String    @default("")
+  location    String    @default("")
+  mode        String    @default("ON_SITE")
+  commitment  String    @default("")
+  skills      String[]  @default([])
+  slots       Int?
+  deadline    DateTime?
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  eventId     String?
+  event       Event?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  image       String    @default("")
+  status      String    @default("DRAFT") // DRAFT | OPEN | CLOSED | ARCHIVED
+  isSample    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  applications VolunteerApplication[]
+  assignments  VolunteerAssignment[]
+}
+
+enum ApplicationStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  INFO_REQUESTED
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+model VolunteerApplication {
+  id            String                @id @default(cuid())
+  reference     String                @unique
+  profileId     String
+  profile       VolunteerProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  opportunityId String?
+  opportunity   VolunteerOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  motivation    String
+  status        ApplicationStatus     @default(SUBMITTED)
+  messageToApplicant String           @default("") // shown on the status page (e.g. info requested)
+  reviewedById  String?
+  reviewedAt    DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model VolunteerAssignment {
+  id            String                @id @default(cuid())
+  profileId     String
+  profile       VolunteerProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  projectId     String?
+  project       Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  eventId       String?
+  event         Event?                @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  opportunityId String?
+  opportunity   VolunteerOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  role          String
+  responsibilities String             @default("")
+  startDate     DateTime
+  endDate       DateTime?
+  status        String                @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  hours VolunteerHours[]
+}
+
+model VolunteerHours {
+  id           String               @id @default(cuid())
+  profileId    String
+  profile      VolunteerProfile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  assignmentId String?
+  assignment   VolunteerAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  date         DateTime
+  minutes      Int
+  activity     String
+  approvedById String
+  createdAt    DateTime             @default(now())
+
+  @@index([profileId, date])
+}
+
+// ─── Beneficiaries (private) ──────────────────────────────────────────────────────
+
+model Beneficiary {
+  id             String    @id @default(cuid())
+  code           String    @unique // internal ID, e.g. BEN-000123
+  fullName       String
+  gender         String    @default("")
+  dateOfBirth    DateTime?
+  isMinor        Boolean   @default(false)
+  guardianName   String    @default("")
+  phone          String    @default("")
+  address        String    @default("")
+  village        String    @default("") // aggregated reporting dimension
+  district       String    @default("")
+  projectId      String?
+  project        Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  programs       String[]  @default([])
+  status         String    @default("ACTIVE") // ACTIVE | FOLLOW_UP | EXITED
+  consentPublic  Boolean   @default(false)
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  assistance AssistanceRecord[]
+  caseNotes  CaseNote[]
+
+  @@index([projectId])
+  @@index([district])
+}
+
+model AssistanceRecord {
+  id            String      @id @default(cuid())
+  beneficiaryId String
+  beneficiary   Beneficiary @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  projectId     String?
+  project       Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  type          String // e.g. "Food kit", "Scholarship", "Medical consultation"
+  description   String      @default("")
+  quantity      Float       @default(1)
+  unit          String      @default("unit")
+  valueAmount   Int? // minor units, optional
+  distributedAt DateTime
+  recordedById  String?
+  createdAt     DateTime    @default(now())
+
+  @@index([distributedAt])
+  @@index([type])
+}
+
+model CaseNote {
+  id            String      @id @default(cuid())
+  beneficiaryId String
+  beneficiary   Beneficiary @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  note          String
+  followUpAt    DateTime?
+  authorId      String?
+  createdAt     DateTime    @default(now())
+}
+
+// ─── Communication ────────────────────────────────────────────────────────────────
+
+enum InquiryStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+  SPAM
+}
+
+model ContactInquiry {
+  id           String        @id @default(cuid())
+  type         String        @default("GENERAL")
+  name         String
+  email        String
+  phone        String        @default("")
+  organization String        @default("")
+  subject      String
+  message      String
+  status       InquiryStatus @default(NEW)
+  assignedToId String?
+  ipHash       String        @default("")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([status, createdAt])
+  @@index([type])
+}
+
+enum SubscriberStatus {
+  SUBSCRIBED
+  UNSUBSCRIBED
+}
+
+model NewsletterSubscriber {
+  id               String           @id @default(cuid())
+  email            String           @unique
+  name             String           @default("")
+  status           SubscriberStatus @default(SUBSCRIBED)
+  source           String           @default("")
+  unsubscribeToken String           @unique
+  consentAt        DateTime         @default(now())
+  unsubscribedAt   DateTime?
+  createdAt        DateTime         @default(now())
+}
+
+model EmailTemplate {
+  key         String   @id
+  name        String
+  description String   @default("")
+  subject     String
+  body        String // markdown with {{variables}}; values are HTML-escaped when rendered
+  variables   String[] @default([])
+  isMarketing Boolean  @default(false)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// Log of every outgoing email (transactional and marketing).
+model EmailLog {
+  id          String   @id @default(cuid())
+  to          String
+  templateKey String
+  subject     String
+  status      String // SENT | FAILED | SKIPPED
+  error       String   @default("")
+  relatedType String   @default("")
+  relatedId   String   @default("")
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([relatedType, relatedId])
+}
+
+/// In-app admin alerts.
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String?
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission String   @default("") // broadcast to staff holding this permission when userId is null
+  type      String
+  title     String
+  body      String    @default("")
+  link      String    @default("")
+  readBy    String[]  @default([])
+  createdAt DateTime  @default(now())
+
+  @@index([createdAt])
+}
+
+model InternalNote {
+  id         String   @id @default(cuid())
+  entityType String // Donation | VolunteerApplication | ContactInquiry | Donor | ...
+  entityId   String
+  body       String
+  authorId   String?
+  author     User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String // e.g. "donation.offline_recorded", "theme.published"
+  entityType String
+  entityId   String   @default("")
+  summary    String   @default("")
+  before     Json?
+  after      Json?
+  ip         String   @default("")
+  userAgent  String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}

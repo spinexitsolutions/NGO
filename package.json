@@ -1,0 +1,22 @@
+{
+  "name": "ngo-platform",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Premium NGO website with a database-driven CMS, theme customizer, donations, volunteers, events and an admin panel.",
+  "workspaces": ["shared", "server", "client"],
+  "scripts": {
+    "dev": "concurrently -n server,client -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w server && npm run build -w client",
+    "start": "npm run start -w server",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w client",
+    "test": "npm run test -w shared && npm run test -w server && npm run test -w client",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:deploy": "npm run db:deploy -w server",
+    "seed": "npm run seed -w server",
+    "create-admin": "npm run create-admin -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": { "node": ">=20.11" }
+}
