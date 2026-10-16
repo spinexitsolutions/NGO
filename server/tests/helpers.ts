@@ -18,6 +18,7 @@ export async function resetDb() {
   const names = tables.map((t) => t.tablename).filter((t) => !KEEP.has(t));
   await prisma.$executeRawUnsafe(`TRUNCATE ${names.map((n) => `"${n}"`).join(', ')} RESTART IDENTITY CASCADE`);
   clearConfigCache();
+  await prisma.role.deleteMany({ where: { isSystem: false } });
   if (!(await prisma.role.count())) {
     for (const key of ALL_PERMISSIONS) await prisma.permission.create({ data: { key, group: PERMISSIONS[key].group, description: PERMISSIONS[key].label } });
     for (const r of DEFAULT_ROLES)
