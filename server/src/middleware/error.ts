@@ -20,6 +20,11 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     e = AppError.conflict('This record is still referenced by other data');
   else if (err instanceof MulterError) e = AppError.badRequest(err.code === 'LIMIT_FILE_SIZE' ? 'File is too large' : err.message);
   else if (err instanceof SyntaxError && 'body' in err) e = AppError.badRequest('Invalid JSON body');
+  else if (typeof (err as { status?: unknown })?.status === 'number' && (err as { status: number }).status < 500) {
+    // e.g. express.static / body-parser errors (404 for a missing upload, 413 payload too large)
+    const status = (err as { status: number }).status;
+    e = new AppError(status, status === 404 ? 'NOT_FOUND' : 'BAD_REQUEST', status === 404 ? 'Not found' : (err as Error).message);
+  }
   else {
     logger.error({ err, path: req.path }, 'Unhandled error');
     e = new AppError(500, 'INTERNAL', 'Something went wrong. Please try again.');

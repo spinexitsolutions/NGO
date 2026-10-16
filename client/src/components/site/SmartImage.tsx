@@ -37,8 +37,8 @@ export function SmartImage({ src, alt, sizes = '100vw', priority, variants, widt
       alt={alt}
       loading={priority ? 'eager' : 'lazy'}
       decoding={priority ? 'sync' : 'async'}
-      // eslint-disable-next-line react/no-unknown-property
-      fetchPriority={priority ? 'high' : 'auto'}
+      // React 18 passes unknown lowercase attributes through to the DOM.
+      {...({ fetchpriority: priority ? 'high' : 'auto' } as Record<string, string>)}
       onError={() => setFailed(true)}
       onLoad={() => setLoaded(true)}
       className={cn('h-full w-full object-cover transition-[opacity,filter] duration-700', loaded ? 'opacity-100 blur-0' : 'opacity-0 blur-sm', className)}

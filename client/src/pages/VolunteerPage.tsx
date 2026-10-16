@@ -11,9 +11,8 @@ function Opportunities() {
   const { data, isLoading, error, refetch } = useCollection<Opportunity>('opportunities', { limit: 50 });
   const items = data?.data ?? [];
   return (
-    <section className="container-x section-y" aria-labelledby="opps-heading">
+    <section className="container-x section-y" aria-label="Volunteer opportunities">
       <SectionHeader eyebrow="Open roles" heading="Volunteer opportunities" intro="Pick a role that fits your skills and schedule — or apply as a general volunteer and we’ll match you." />
-      <span id="opps-heading" className="sr-only">Volunteer opportunities</span>
       {isLoading ? (
         <CardGridSkeleton count={3} />
       ) : error ? (

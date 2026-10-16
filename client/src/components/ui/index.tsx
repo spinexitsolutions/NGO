@@ -106,16 +106,16 @@ export const Checkbox = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInp
 });
 
 /** Hidden honeypot field for public forms. */
-export function Honeypot(props: InputHTMLAttributes<HTMLInputElement>) {
+export const Honeypot = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Honeypot(props, ref) {
   return (
     <div aria-hidden className="absolute left-[-9999px] top-auto h-px w-px overflow-hidden">
       <label>
         Leave this empty
-        <input tabIndex={-1} autoComplete="off" {...props} />
+        <input ref={ref} tabIndex={-1} autoComplete="off" {...props} />
       </label>
     </div>
   );
-}
+});
 
 // ─── Feedback & states ────────────────────────────────────────────────────────
 

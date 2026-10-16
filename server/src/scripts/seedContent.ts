@@ -151,7 +151,6 @@ export const SEED_PAGES: SeedPage[] = [
       s('posts', { eyebrow: 'News & insights', heading: 'From the field', limit: 3, linkLabel: 'Read the blog' }),
       s('testimonials', { eyebrow: 'Voices', heading: 'What our supporters say', limit: 6 }),
       s('partners', { eyebrow: 'Together', heading: 'Partners and supporters', partnerType: 'all' }),
-      s('newsletter', { eyebrow: 'Stay close', heading: 'Stories of change, once a month', body: 'Field updates, impact reports and ways to help. Unsubscribe anytime.' }, { background: 'dark' }),
     ],
   },
   {
