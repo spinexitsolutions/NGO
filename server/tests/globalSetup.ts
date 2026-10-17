@@ -1,8 +1,10 @@
 import { execSync } from 'node:child_process';
+import fs from 'node:fs';
 
-/** Applies migrations to the dedicated test database (non-destructive). Tables are emptied per test by helpers.resetDb. */
+/** Creates/updates the separate SQLite test database file (never the real one). */
 export default function setup() {
-  const url = process.env.TEST_DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/ngo_app_test';
-  if (!/\/[\w-]+_test(\?|$)/.test(url)) throw new Error(`Refusing to run tests against a non-test database: ${url}`);
+  const url = process.env.TEST_DATABASE_URL ?? 'file:../data/test.db';
+  if (!/test/.test(url)) throw new Error(`Refusing to run tests against a non-test database: ${url}`);
+  fs.mkdirSync('data', { recursive: true });
   execSync('npx prisma migrate deploy', { stdio: 'pipe', env: { ...process.env, DATABASE_URL: url } });
 }

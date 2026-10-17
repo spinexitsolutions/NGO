@@ -13,7 +13,7 @@ export default defineConfig({
     // Test-only values — never real secrets.
     env: {
       NODE_ENV: 'test',
-      DATABASE_URL: process.env.TEST_DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/ngo_app_test',
+      DATABASE_URL: process.env.TEST_DATABASE_URL ?? 'file:../data/test.db',
       APP_SECRET: 'test-secret-test-secret-test-secret-test-secret',
       PAYMENT_PROVIDER: 'sandbox',
       RAZORPAY_KEY_ID: 'rzp_test_dummy',

@@ -17,7 +17,7 @@ design and content** — without editing code or redeploying.
 | --- | --- | --- |
 | Frontend | React 18 + Vite + TypeScript, Tailwind CSS, Framer Motion, React Query, React Hook Form + Zod, Recharts, dnd-kit | Fast SPA with code splitting; CSS-variable theming lets the admin restyle everything at runtime |
 | Backend | Node.js + Express + TypeScript | Simple, well-understood, easy to host anywhere |
-| Database | PostgreSQL + Prisma ORM (migrations in `server/prisma/migrations`) | Relational integrity for money, unique constraints for idempotency, transactions |
+| Database | **SQLite** (one file: `server/data/ngo.db`) + Prisma ORM (migrations in `server/prisma/migrations`) | Nothing to install; still relational with unique constraints for idempotency and transactions |
 | Auth | Server-side sessions (opaque httpOnly cookie, hashed in DB) + double-submit CSRF + optional TOTP MFA | Revocable sessions, no tokens in JS, works for a same-origin SPA |
 | Payments | Razorpay (orders, subscriptions, refunds, webhooks) behind a provider interface; a local **sandbox** provider for development | Real signature verification path in both modes |
 | Media | Local disk (dev) or Cloudinary (prod); images re-encoded to WebP with responsive variants by `sharp` | Safe uploads (content sniffing, metadata stripped) and fast delivery |
@@ -45,16 +45,18 @@ ngo/
 │  └─ src/  permissions.ts (catalog + default roles) · theme.ts (tokens, presets, CSS vars)
 │           settings.ts (site settings + navigation) · sections.ts (page-section registry)
 │           collections.ts (CMS content types) · fields.ts (field defs → Zod) · forms.ts · money.ts
+├─ scripts/local.mjs       `npm run local` — one-command setup & run on a laptop
 ├─ server/                 Express + Prisma REST API  (/api/v1)
+│  ├─ data/                SQLite database file (created automatically, not committed)
 │  ├─ prisma/              schema.prisma + migrations
 │  ├─ src/config/          env (validated), db, logger
 │  ├─ src/middleware/      sessions/RBAC, CSRF, rate limits, uploads (magic-byte sniffing), errors
 │  ├─ src/services/        auth, config (draft/publish), pages, collections, media/storage,
 │  │                       donations, payments (razorpay/sandbox), receipts (PDF), email, audit, notifications
 │  ├─ src/routes/          public, forms, donations/webhooks/donor portal, seo (sitemap/robots), admin/*
-│  ├─ src/jobs/            scheduled publishing & cleanup (Postgres advisory locks)
+│  ├─ src/jobs/            scheduled publishing & cleanup
 │  ├─ src/scripts/         seed, create-admin
-│  └─ tests/               Vitest + Supertest against a real PostgreSQL test database
+│  └─ tests/               Vitest + Supertest against a separate SQLite test database
 ├─ client/                 React SPA
 │  └─ src/  app/ (SiteProvider = theme engine, AuthProvider) · components/ui (design system)
 │           components/site (layout, images, motion, cards, forms, SEO) · features/sections (renderers)
@@ -90,22 +92,30 @@ review workflow with emails, assignments, hours); events registrations & attenda
 announcements); staff users, configurable roles & permissions; reports with CSV export and print;
 audit log; account security (password, MFA, sessions).
 
-## 3. Local setup
+## 3. Run it on your laptop (no database to install)
 
-Requirements: **Node.js 20.11+** and **PostgreSQL 14+**.
+Requirements: **Node.js 20.11+** only (https://nodejs.org). Windows, macOS and Linux all work.
 
 ```bash
+git clone https://github.com/spinexitsolutions/NGO.git ngo
+cd ngo
 npm install
-cp server/.env.example server/.env        # then edit DATABASE_URL and APP_SECRET
-createdb ngo                               # or create the database in your Postgres tool
-npm run db:migrate                         # applies migrations (prisma migrate dev)
-npm run seed                               # roles, settings, pages + labelled sample content
-                                           # (use `npm run seed -- --no-sample` to skip samples)
-npm run create-admin -- --email you@your-ngo.org --name "Your Name"
-npm run dev                                # API :4000 + website :5173
+npm run local
 ```
 
-Open http://localhost:5173 for the website and http://localhost:5173/admin for the admin panel.
+`npm run local` does everything on the first run: creates `server/.env` with a fresh secret, creates the
+database file `server/data/ngo.db`, adds the labelled sample content, creates an admin account and prints its
+email and password (also saved in `LOCAL-ADMIN.txt`), then starts the API and the website.
+
+- Website: http://localhost:5173
+- Admin panel: http://localhost:5173/admin
+
+Next time just run `npm run local` again (your data stays in `server/data/ngo.db`). Stop with **Ctrl+C**.
+To start over with a clean database, stop the app and delete the `server/data` folder.
+
+Manual steps, if you prefer: `cp server/.env.example server/.env` (set `APP_SECRET`), `npm run db:deploy`,
+`npm run seed` (`-- --no-sample` to skip sample content), `npm run create-admin -- --email you@org --name "You"`,
+`npm run dev`.
 
 ### Creating admin accounts
 There is **no public registration endpoint**. The first Super Admin is created with
@@ -119,7 +129,7 @@ See `server/.env.example` for every variable. Key ones:
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string |
+| `DATABASE_URL` | SQLite file, default `file:../data/ngo.db` (relative to `server/prisma/`, i.e. `server/data/ngo.db`) |
 | `APP_SECRET` | ≥32 random chars (`openssl rand -hex 32`); encrypts MFA secrets, signs donor sessions |
 | `PUBLIC_SITE_URL` | Public URL used in emails, receipts and the sitemap |
 | `COOKIE_SECURE` | `true` behind HTTPS |
@@ -155,12 +165,12 @@ authorised staff; mount that directory on persistent storage.
 ## 5. Testing
 
 ```bash
-createdb ngo_app_test           # once; tests refuse to run against a database not ending in _test
-npm test                        # shared + server (API against PostgreSQL) + client
+npm test                        # shared + server (API against a SQLite test file) + client
 npm run typecheck
 ```
 
-`TEST_DATABASE_URL` overrides the default `postgresql://postgres:postgres@localhost:5432/ngo_app_test`.
+Tests use a separate database file (`server/data/test.db`) and refuse to run against a database whose
+name does not contain `test`.
 The server suite (53 tests) covers login, lockout, MFA, password reset, CSRF, RBAC on every sensitive
 area, theme publish/restore/reset, page publish validation, scheduled publishing, donation checkout
 validation, sandbox payment, signature rejection, idempotent verification, duplicate webhooks, amount
@@ -171,14 +181,14 @@ safety and usage tracking, and public-API privacy.
 ## 6. Deployment
 
 See [docs/deployment.md](docs/deployment.md). In short: build the Docker image (`Dockerfile` serves the
-API and the built website from one origin), provide PostgreSQL, set the environment variables, run
+API and the built website from one origin), mount a persistent volume for `server/data`, set the environment variables, run
 `npm run create-admin` once, put it behind HTTPS and set `COOKIE_SECURE=true`.
 
 ## 7. Backups & maintenance
 
-- **Database**: enable automated daily backups with point-in-time recovery on your managed Postgres
-  (Neon, Supabase, RDS, Render…), or run `pg_dump -Fc "$DATABASE_URL" > ngo-$(date +%F).dump` from cron and
-  copy dumps off-site. Test a restore (`pg_restore -d <empty db> file.dump`) every quarter.
+- **Database**: the whole database is `server/data/ngo.db`. Back it up by copying that file while the app is
+  stopped (or with `sqlite3 server/data/ngo.db ".backup backup-$(date +%F).db"` while running) and keep copies
+  off the machine. Restore = stop the app and put the file back.
 - **Media**: Cloudinary keeps originals; enable backups on your Cloudinary plan or sync to object storage.
   Back up the private-uploads volume (volunteer CVs).
 - **Updates**: `npm outdated`, update in a branch, run `npm test`, deploy. Apply migrations with
@@ -192,6 +202,8 @@ API and the built website from one origin), provide PostgreSQL, set the environm
   it has **not** been exercised against live Razorpay servers from this environment — test with your test
   keys before going live.
 - Docker image and Cloudinary/SMTP drivers are implemented but were not run in this environment.
+- SQLite suits one server and normal NGO traffic. For many concurrent editors or multiple servers, move to
+  PostgreSQL by changing the Prisma provider and generating a new migration (queries avoid database-specific SQL).
 - Multilingual: the architecture and settings support a language switcher, but page content is single
   language; per-locale content would add a `locale` to pages/collections.
 - Stock photography (Unsplash) is used for sample content; replace it with your own photographs taken

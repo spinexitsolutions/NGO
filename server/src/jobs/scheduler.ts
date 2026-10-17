@@ -3,14 +3,13 @@ import { logger } from '../config/logger.js';
 import { runScheduledPublishing } from '../services/page.service.js';
 
 /**
- * Lightweight in-process job loop. Each task takes a Postgres advisory lock so that running several
- * server instances never executes the same job concurrently.
+ * Lightweight in-process job loop. With a single-file SQLite database the app runs as one server
+ * process, so an in-memory flag is enough to stop a task overlapping with itself.
  */
-const TASKS: { name: string; lockId: number; everyMs: number; run: () => Promise<unknown> }[] = [
-  { name: 'scheduled-publishing', lockId: 8_100_001, everyMs: 60_000, run: () => runScheduledPublishing() },
+const TASKS: { name: string; everyMs: number; run: () => Promise<unknown> }[] = [
+  { name: 'scheduled-publishing', everyMs: 60_000, run: () => runScheduledPublishing() },
   {
     name: 'cleanup',
-    lockId: 8_100_002,
     everyMs: 6 * 60 * 60_000,
     run: async () => {
       const now = new Date();
@@ -24,16 +23,18 @@ const TASKS: { name: string; lockId: number; everyMs: number; run: () => Promise
   },
 ];
 
+const running = new Set<string>();
+
 async function runLocked(task: (typeof TASKS)[number]) {
-  const [{ locked }] = await prisma.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_lock(${task.lockId}) AS locked`;
-  if (!locked) return;
+  if (running.has(task.name)) return;
+  running.add(task.name);
   try {
     const result = await task.run();
     logger.debug({ task: task.name, result }, 'job finished');
   } catch (err) {
     logger.error({ err, task: task.name }, 'job failed');
   } finally {
-    await prisma.$queryRaw`SELECT pg_advisory_unlock(${task.lockId})`;
+    running.delete(task.name);
   }
 }
 

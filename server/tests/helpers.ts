@@ -13,10 +13,11 @@ const KEEP = new Set(['Permission', 'Role', 'RolePermission', '_prisma_migration
 
 /** Empties every table except roles/permissions, which are (re)created once. */
 export async function resetDb() {
-  if (!/\/[\w-]+_test(\?|$)/.test(process.env.DATABASE_URL ?? '')) throw new Error('resetDb only runs against a *_test database');
-  const tables = await prisma.$queryRaw<{ tablename: string }[]>`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`;
-  const names = tables.map((t) => t.tablename).filter((t) => !KEEP.has(t));
-  await prisma.$executeRawUnsafe(`TRUNCATE ${names.map((n) => `"${n}"`).join(', ')} RESTART IDENTITY CASCADE`);
+  if (!/test/.test(process.env.DATABASE_URL ?? '')) throw new Error('resetDb only runs against a test database');
+  const tables = await prisma.$queryRawUnsafe<{ name: string }[]>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`);
+  await prisma.$executeRawUnsafe('PRAGMA foreign_keys = OFF');
+  for (const { name } of tables) if (!KEEP.has(name)) await prisma.$executeRawUnsafe(`DELETE FROM "${name}"`);
+  await prisma.$executeRawUnsafe('PRAGMA foreign_keys = ON');
   clearConfigCache();
   await prisma.role.deleteMany({ where: { isSystem: false } });
   if (!(await prisma.role.count())) {

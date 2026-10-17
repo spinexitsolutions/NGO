@@ -1,4 +1,5 @@
-// NGO platform database schema (PostgreSQL).
+// NGO platform database schema (SQLite — the whole database is one file, no server to install).
+// Lists of strings are stored as JSON arrays.
 // Money is always stored as integer minor units (paise for INR) in `Int` columns.
 // Donation totals are computed from Donation rows with status SUCCESS — never from editable fields.
 
@@ -7,7 +8,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -224,10 +225,10 @@ model Cause {
   icon           String        @default("HeartHandshake")
   coverImage     String
   coverAlt       String        @default("")
-  gallery        String[]      @default([])
-  goals          String[]      @default([])
-  activities     String[]      @default([])
-  outcomes       String[]      @default([])
+  gallery        Json      @default("[]")
+  goals          Json      @default("[]")
+  activities     Json      @default("[]")
+  outcomes       Json      @default("[]")
   sortOrder      Int?          @default(0)
   seoTitle       String        @default("")
   seoDescription String        @default("")
@@ -258,12 +259,12 @@ model Campaign {
   body             String         @default("")
   coverImage       String
   coverAlt         String         @default("")
-  gallery          String[]       @default([])
+  gallery          Json       @default("[]")
   causeId          String?
   cause            Cause?         @relation(fields: [causeId], references: [id], onDelete: SetNull)
   goalAmount       Int
   currency         String         @default("INR")
-  suggestedAmounts String[]       @default([])
+  suggestedAmounts Json       @default("[]")
   startDate        DateTime
   endDate          DateTime?
   isFeatured       Boolean        @default(false)
@@ -313,7 +314,7 @@ model Project {
   body                  String        @default("")
   coverImage            String
   coverAlt              String        @default("")
-  gallery               String[]      @default([])
+  gallery               Json      @default("[]")
   videoUrl              String        @default("")
   causeId               String?
   cause                 Cause?        @relation(fields: [causeId], references: [id], onDelete: SetNull)
@@ -323,9 +324,9 @@ model Project {
   location              String        @default("")
   startDate             DateTime
   endDate               DateTime?
-  objectives            String[]      @default([])
-  activities            String[]      @default([])
-  outcomes              String[]      @default([])
+  objectives            Json      @default("[]")
+  activities            Json      @default("[]")
+  outcomes              Json      @default("[]")
   beneficiariesReached  Int?
   beneficiariesVerified Boolean       @default(false)
   budgetAmount          Int?
@@ -571,7 +572,7 @@ model BlogPost {
   authorName     String     @default("")
   categoryId     String?
   category       Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  tags           String[]   @default([])
+  tags           Json   @default("[]")
   publishedAt    DateTime?
   seoTitle       String     @default("")
   seoDescription String     @default("")
@@ -581,7 +582,6 @@ model BlogPost {
   updatedAt      DateTime   @updatedAt
 
   @@index([status, publishedAt])
-  @@index([tags], type: Gin)
 }
 
 // ─── Events ────────────────────────────────────────────────────────────────────────
@@ -601,7 +601,7 @@ model Event {
   body             String      @default("")
   coverImage       String
   coverAlt         String      @default("")
-  gallery          String[]    @default([])
+  gallery          Json    @default("[]")
   startsAt         DateTime
   endsAt           DateTime?
   venue            String      @default("")
@@ -878,8 +878,8 @@ model VolunteerProfile {
   city              String
   dateOfBirth       DateTime?
   occupation        String    @default("")
-  interests         String[]  @default([])
-  skills            String[]  @default([])
+  interests         Json  @default("[]")
+  skills            Json  @default("[]")
   experience        String    @default("")
   availability      String
   hoursPerWeek      Int?
@@ -905,7 +905,7 @@ model VolunteerOpportunity {
   location    String    @default("")
   mode        String    @default("ON_SITE")
   commitment  String    @default("")
-  skills      String[]  @default([])
+  skills      Json  @default("[]")
   slots       Int?
   deadline    DateTime?
   projectId   String?
@@ -1001,7 +1001,7 @@ model Beneficiary {
   district       String    @default("")
   projectId      String?
   project        Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  programs       String[]  @default([])
+  programs       Json  @default("[]")
   status         String    @default("ACTIVE") // ACTIVE | FOLLOW_UP | EXITED
   consentPublic  Boolean   @default(false)
   createdById    String?
@@ -1095,7 +1095,7 @@ model EmailTemplate {
   description String   @default("")
   subject     String
   body        String // markdown with {{variables}}; values are HTML-escaped when rendered
-  variables   String[] @default([])
+  variables   Json @default("[]")
   isMarketing Boolean  @default(false)
   updatedById String?
   updatedAt   DateTime @updatedAt
@@ -1127,7 +1127,7 @@ model Notification {
   title     String
   body      String    @default("")
   link      String    @default("")
-  readBy    String[]  @default([])
+  readBy    Json  @default("[]")
   createdAt DateTime  @default(now())
 
   @@index([createdAt])

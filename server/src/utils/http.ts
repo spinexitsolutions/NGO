@@ -22,3 +22,8 @@ export function pageMeta(page: number, limit: number, total: number) {
 export function clientIp(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? '';
 }
+
+/** JSON columns hold string lists (SQLite has no array type). */
+export function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}

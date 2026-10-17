@@ -3,8 +3,13 @@
   "private": true,
   "version": "1.0.0",
   "description": "Premium NGO website with a database-driven CMS, theme customizer, donations, volunteers, events and an admin panel.",
-  "workspaces": ["shared", "server", "client"],
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
   "scripts": {
+    "local": "node scripts/local.mjs",
     "dev": "concurrently -n server,client -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w server && npm run build -w client",
     "start": "npm run start -w server",
@@ -18,5 +23,7 @@
   "devDependencies": {
     "concurrently": "^9.1.0"
   },
-  "engines": { "node": ">=20.11" }
+  "engines": {
+    "node": ">=20.11"
+  }
 }

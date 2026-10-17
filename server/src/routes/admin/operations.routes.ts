@@ -119,7 +119,7 @@ adminBeneficiariesRouter.get(
     const where: Prisma.BeneficiaryWhereInput = {};
     if (q.projectId) where.projectId = q.projectId;
     if (q.status) where.status = q.status;
-    if (q.q) where.OR = [{ code: { contains: q.q, mode: 'insensitive' } }, { fullName: { contains: q.q, mode: 'insensitive' } }, { village: { contains: q.q, mode: 'insensitive' } }];
+    if (q.q) where.OR = [{ code: { contains: q.q } }, { fullName: { contains: q.q } }, { village: { contains: q.q } }];
     if (q.format === 'csv') {
       if (!hasPermission(req.user, 'beneficiaries.manage')) throw AppError.forbidden();
       const rows = await prisma.beneficiary.findMany({ where, include: { project: { select: { title: true } }, _count: { select: { assistance: true } } }, orderBy: { code: 'asc' } });
@@ -249,7 +249,7 @@ adminInquiriesRouter.get(
     const where: Prisma.ContactInquiryWhereInput = {};
     if (q.status) where.status = q.status;
     if (q.type) where.type = q.type;
-    if (q.q) where.OR = [{ name: { contains: q.q, mode: 'insensitive' } }, { email: { contains: q.q, mode: 'insensitive' } }, { subject: { contains: q.q, mode: 'insensitive' } }, { organization: { contains: q.q, mode: 'insensitive' } }];
+    if (q.q) where.OR = [{ name: { contains: q.q } }, { email: { contains: q.q } }, { subject: { contains: q.q } }, { organization: { contains: q.q } }];
     const [data, total, counts] = await Promise.all([
       prisma.contactInquiry.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (q.page - 1) * q.limit, take: q.limit, omit: { ipHash: true } }),
       prisma.contactInquiry.count({ where }),
@@ -297,7 +297,7 @@ adminSubscribersRouter.get(
     const q = parse(z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(50), status: z.enum(['SUBSCRIBED', 'UNSUBSCRIBED']).optional(), q: z.string().max(200).optional(), format: z.enum(['json', 'csv']).default('json') }), req.query);
     const where: Prisma.NewsletterSubscriberWhereInput = {};
     if (q.status) where.status = q.status;
-    if (q.q) where.email = { contains: q.q, mode: 'insensitive' };
+    if (q.q) where.email = { contains: q.q };
     if (q.format === 'csv') {
       const rows = await prisma.newsletterSubscriber.findMany({ where, orderBy: { createdAt: 'desc' }, omit: { unsubscribeToken: true } });
       await audit(req, { action: 'subscribers.exported', entityType: 'NewsletterSubscriber', summary: `${rows.length} rows` });

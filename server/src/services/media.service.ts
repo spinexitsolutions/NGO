@@ -99,65 +99,60 @@ export async function removeStoredFiles(key: string, variants: Record<string, st
   }
 }
 
-// Tables/columns that can reference media URLs (text and JSON).
-const URL_COLUMNS: { table: string; columns: string[]; json?: string[]; arrays?: string[] }[] = [
-  { table: 'ConfigDocument', columns: [], json: ['draft', 'published'] },
-  { table: 'Page', columns: [], json: ['draft'] },
-  { table: 'PageVersion', columns: [], json: ['data'] },
-  { table: 'Cause', columns: ['coverImage', 'body'], arrays: ['gallery'] },
-  { table: 'Campaign', columns: ['coverImage', 'body'], arrays: ['gallery'] },
-  { table: 'Project', columns: ['coverImage', 'body'], arrays: ['gallery'] },
-  { table: 'Story', columns: ['image', 'body'] },
-  { table: 'Event', columns: ['coverImage', 'body'], arrays: ['gallery'], json: ['materials'] },
-  { table: 'BlogPost', columns: ['coverImage', 'body'] },
-  { table: 'TeamMember', columns: ['photo'] },
-  { table: 'Partner', columns: ['logo'] },
-  { table: 'Testimonial', columns: ['photo'] },
-  { table: 'Document', columns: ['fileUrl', 'coverImage'] },
-  { table: 'GalleryAlbum', columns: ['coverImage'], json: ['items'] },
-  { table: 'CampaignUpdate', columns: ['image', 'body'] },
-  { table: 'ProjectReport', columns: ['image', 'fileUrl', 'body'] },
-  { table: 'VolunteerOpportunity', columns: ['image'] },
+// Models/fields that can reference media URLs (plain text, JSON documents and JSON lists).
+const URL_FIELDS: { model: string; id: string; label: string; fields: string[]; history?: boolean }[] = [
+  { model: 'configDocument', id: 'key', label: 'key', fields: ['draft', 'published'] },
+  { model: 'page', id: 'id', label: 'slug', fields: ['draft'] },
+  { model: 'pageVersion', id: 'id', label: 'pageId', fields: ['data'], history: true },
+  { model: 'cause', id: 'id', label: 'title', fields: ['coverImage', 'body', 'gallery'] },
+  { model: 'campaign', id: 'id', label: 'title', fields: ['coverImage', 'body', 'gallery'] },
+  { model: 'project', id: 'id', label: 'title', fields: ['coverImage', 'body', 'gallery'] },
+  { model: 'story', id: 'id', label: 'title', fields: ['image', 'body'] },
+  { model: 'event', id: 'id', label: 'title', fields: ['coverImage', 'body', 'gallery', 'materials'] },
+  { model: 'blogPost', id: 'id', label: 'title', fields: ['coverImage', 'body'] },
+  { model: 'teamMember', id: 'id', label: 'name', fields: ['photo'] },
+  { model: 'partner', id: 'id', label: 'name', fields: ['logo'] },
+  { model: 'testimonial', id: 'id', label: 'author', fields: ['photo'] },
+  { model: 'document', id: 'id', label: 'title', fields: ['fileUrl', 'coverImage'] },
+  { model: 'galleryAlbum', id: 'id', label: 'title', fields: ['coverImage', 'items'] },
+  { model: 'campaignUpdate', id: 'id', label: 'title', fields: ['image', 'body'] },
+  { model: 'projectReport', id: 'id', label: 'title', fields: ['image', 'fileUrl', 'body'] },
+  { model: 'volunteerOpportunity', id: 'id', label: 'title', fields: ['image'] },
 ];
 
-/** Finds where an asset URL is used (best effort: scans known columns, JSON documents and arrays). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Delegate = { findMany: (args: unknown) => Promise<Record<string, any>[]>; update: (args: unknown) => Promise<unknown> };
+const delegateFor = (model: string) => (prisma as unknown as Record<string, Delegate>)[model];
+
+const mentions = (value: unknown, url: string) => (typeof value === 'string' ? value : JSON.stringify(value ?? '')).includes(url);
+
+/** Finds where an asset URL is used (scans known text, JSON and list fields). */
 export async function findUsage(url: string): Promise<{ table: string; id: string; label: string }[]> {
   const results: { table: string; id: string; label: string }[] = [];
-  for (const t of URL_COLUMNS) {
-    const conds = [
-      ...t.columns.map((c) => `"${c}" LIKE '%' || $1 || '%'`),
-      ...(t.json ?? []).map((c) => `"${c}"::text LIKE '%' || $1 || '%'`),
-      ...(t.arrays ?? []).map((c) => `$1 = ANY("${c}")`),
-    ];
-    if (!conds.length) continue;
-    const idCol = t.table === 'ConfigDocument' ? 'key' : 'id';
-    const labelCol =
-      t.table === 'ConfigDocument' ? '"key"' : t.table === 'Page' ? '"slug"' : t.table === 'PageVersion' ? '"pageId"' : ['TeamMember', 'Partner'].includes(t.table) ? '"name"' : t.table === 'Testimonial' ? '"author"' : '"title"';
-    const rows = await prisma.$queryRawUnsafe<{ id: string; label: string }[]>(
-      `SELECT "${idCol}" AS id, ${labelCol}::text AS label FROM "${t.table}" WHERE ${conds.join(' OR ')} LIMIT 20`,
-      url,
-    );
-    rows.forEach((r) => results.push({ table: t.table, id: r.id, label: r.label }));
+  for (const t of URL_FIELDS.filter((x) => !x.history)) {
+    const select = Object.fromEntries([t.id, t.label, ...t.fields].map((f) => [f, true]));
+    const rows = await delegateFor(t.model).findMany({ select });
+    for (const r of rows) {
+      if (t.fields.some((f) => mentions(r[f], url))) results.push({ table: t.model[0].toUpperCase() + t.model.slice(1), id: String(r[t.id]), label: String(r[t.label] ?? '') });
+      if (results.length > 200) return results;
+    }
   }
-  return results.filter((r) => r.table !== 'PageVersion');
+  return results;
 }
 
 async function replaceUrlEverywhere(oldUrl: string, newUrl: string): Promise<number> {
   let count = 0;
-  for (const t of URL_COLUMNS) {
-    if (t.table === 'PageVersion') continue; // published history stays immutable
-    for (const c of t.columns) {
-      count += await prisma.$executeRawUnsafe(`UPDATE "${t.table}" SET "${c}" = replace("${c}", $1, $2) WHERE "${c}" LIKE '%' || $1 || '%'`, oldUrl, newUrl);
-    }
-    for (const c of t.json ?? []) {
-      count += await prisma.$executeRawUnsafe(
-        `UPDATE "${t.table}" SET "${c}" = replace("${c}"::text, $1, $2)::jsonb WHERE "${c}"::text LIKE '%' || $1 || '%'`,
-        JSON.stringify(oldUrl).slice(1, -1),
-        JSON.stringify(newUrl).slice(1, -1),
-      );
-    }
-    for (const c of t.arrays ?? []) {
-      count += await prisma.$executeRawUnsafe(`UPDATE "${t.table}" SET "${c}" = array_replace("${c}", $1, $2) WHERE $1 = ANY("${c}")`, oldUrl, newUrl);
+  const swap = (value: unknown): unknown =>
+    typeof value === 'string' ? value.split(oldUrl).join(newUrl) : JSON.parse(JSON.stringify(value).split(JSON.stringify(oldUrl).slice(1, -1)).join(JSON.stringify(newUrl).slice(1, -1)));
+  // Published page history stays immutable.
+  for (const t of URL_FIELDS.filter((x) => !x.history)) {
+    const select = Object.fromEntries([t.id, ...t.fields].map((f) => [f, true]));
+    const rows = await delegateFor(t.model).findMany({ select });
+    for (const r of rows) {
+      const changed = Object.fromEntries(t.fields.filter((f) => mentions(r[f], oldUrl)).map((f) => [f, swap(r[f])]));
+      if (!Object.keys(changed).length) continue;
+      await delegateFor(t.model).update({ where: { [t.id]: r[t.id] }, data: changed });
+      count++;
     }
   }
   clearConfigCache();

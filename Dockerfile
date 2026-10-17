@@ -26,7 +26,10 @@ COPY --from=build /app/server/prisma server/prisma
 COPY --from=build /app/node_modules/.prisma node_modules/.prisma
 COPY --from=build /app/client/dist client/dist
 WORKDIR /app/server
+RUN mkdir -p data uploads private-uploads && chown -R node:node /app/server
 USER node
 EXPOSE 4000
+# Database = SQLite file in /app/server/data (mount a persistent volume there).
+ENV DATABASE_URL=file:../data/ngo.db
 # Apply pending migrations, then start.
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]

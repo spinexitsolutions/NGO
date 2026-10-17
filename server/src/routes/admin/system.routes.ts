@@ -6,10 +6,10 @@ import { prisma } from '../../config/db.js';
 import { hasPermission, requireAuth, requirePermission } from '../../middleware/auth.js';
 import { audit } from '../../services/audit.service.js';
 import { hashPassword, passwordSchema } from '../../services/auth.service.js';
-import { netRaisedWhere } from '../../services/donation.service.js';
+import { campaignTotals, netRaisedWhere } from '../../services/donation.service.js';
 import { AppError } from '../../utils/AppError.js';
 import { toCsv } from '../../utils/csv.js';
-import { asyncHandler, pageMeta, parse } from '../../utils/http.js';
+import { asyncHandler, pageMeta, parse, strings } from '../../utils/http.js';
 
 // ─── Staff users & roles ───────────────────────────────────────────────────────
 
@@ -191,16 +191,23 @@ dashboardRouter.get(
     let trend: { day: string; amount: number; count: number }[] = [];
     let campaigns: { id: string; title: string; goal: number; raised: number }[] = [];
     if (canFinance) {
-      const rows = await prisma.$queryRaw<{ day: Date; amount: bigint; count: bigint }[]>`
-        SELECT date_trunc('day', "paidAt") AS day, SUM("amount" - "refundedAmount") AS amount, COUNT(*) AS count
-        FROM "Donation" WHERE "status" IN ('SUCCESS','PARTIALLY_REFUNDED') AND "paidAt" >= ${from} AND "paidAt" < ${to}
-        GROUP BY 1 ORDER BY 1`;
-      trend = rows.map((r) => ({ day: r.day.toISOString().slice(0, 10), amount: Number(r.amount), count: Number(r.count) }));
-      const top = await prisma.$queryRaw<{ id: string; title: string; goal: number; raised: bigint }[]>`
-        SELECT c."id", c."title", c."goalAmount" AS goal, COALESCE(SUM(d."amount" - d."refundedAmount") FILTER (WHERE d."status" IN ('SUCCESS','PARTIALLY_REFUNDED')), 0) AS raised
-        FROM "Campaign" c LEFT JOIN "Donation" d ON d."campaignId" = c."id"
-        WHERE c."status" IN ('ACTIVE','COMPLETED') GROUP BY c."id" ORDER BY raised DESC LIMIT 6`;
-      campaigns = top.map((c) => ({ ...c, raised: Number(c.raised) }));
+      const paid = await prisma.donation.findMany({
+        where: { status: { in: ['SUCCESS', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: from, lt: to } },
+        select: { paidAt: true, amount: true, refundedAmount: true },
+      });
+      const byDay = new Map<string, { amount: number; count: number }>();
+      for (const d of paid) {
+        const day = d.paidAt!.toISOString().slice(0, 10);
+        const cur = byDay.get(day) ?? { amount: 0, count: 0 };
+        byDay.set(day, { amount: cur.amount + d.amount - d.refundedAmount, count: cur.count + 1 });
+      }
+      trend = [...byDay.entries()].sort(([x], [y]) => x.localeCompare(y)).map(([day, v]) => ({ day, ...v }));
+      const list = await prisma.campaign.findMany({ where: { status: { in: ['ACTIVE', 'COMPLETED'] } }, select: { id: true, title: true, goalAmount: true } });
+      const totals = await campaignTotals(list.map((c) => c.id));
+      campaigns = list
+        .map((c) => ({ id: c.id, title: c.title, goal: c.goalAmount, raised: totals.get(c.id)?.raised ?? 0 }))
+        .sort((x, y) => y.raised - x.raised)
+        .slice(0, 6);
     }
 
     const byStatus = Object.fromEntries(statusBreakdown.map((s) => [s.status, { count: s._count, amount: s._sum.amount ?? 0, refunded: s._sum.refundedAmount ?? 0 }]));
@@ -233,49 +240,64 @@ reportsRouter.get(
     const format = req.query.format === 'csv' ? 'csv' : 'json';
     let rows: Record<string, unknown>[] = [];
     let columns: string[] = [];
+    const inRange = { gte: from, lt: to };
+    const month = (d: Date) => d.toISOString().slice(0, 7);
     switch (req.params.type) {
       case 'donations-monthly': {
         if (!hasPermission(req.user, 'donations.view')) throw AppError.forbidden();
-        const r = await prisma.$queryRaw<{ month: Date; status: string; count: bigint; amount: bigint; refunded: bigint }[]>`
-          SELECT date_trunc('month', COALESCE("paidAt","createdAt")) AS month, "status", COUNT(*) AS count, SUM("amount") AS amount, SUM("refundedAmount") AS refunded
-          FROM "Donation" WHERE COALESCE("paidAt","createdAt") >= ${from} AND COALESCE("paidAt","createdAt") < ${to}
-          GROUP BY 1, 2 ORDER BY 1, 2`;
-        rows = r.map((x) => ({ month: x.month.toISOString().slice(0, 7), status: x.status, count: Number(x.count), amount: Number(x.amount) / 100, refunded: Number(x.refunded) / 100 }));
+        const list = await prisma.donation.findMany({ where: { OR: [{ paidAt: inRange }, { paidAt: null, createdAt: inRange }] }, select: { paidAt: true, createdAt: true, status: true, amount: true, refundedAmount: true } });
+        const groups = new Map<string, { month: string; status: string; count: number; amount: number; refunded: number }>();
+        for (const d of list) {
+          const key = `${month(d.paidAt ?? d.createdAt)}|${d.status}`;
+          const g = groups.get(key) ?? { month: month(d.paidAt ?? d.createdAt), status: d.status, count: 0, amount: 0, refunded: 0 };
+          g.count++;
+          g.amount += d.amount / 100;
+          g.refunded += d.refundedAmount / 100;
+          groups.set(key, g);
+        }
+        rows = [...groups.values()].sort((x, y) => x.month.localeCompare(y.month) || x.status.localeCompare(y.status));
         columns = ['month', 'status', 'count', 'amount', 'refunded'];
         break;
       }
       case 'campaigns': {
         if (!hasPermission(req.user, 'donations.view') && !hasPermission(req.user, 'campaigns.manage')) throw AppError.forbidden();
-        const r = await prisma.$queryRaw<{ title: string; status: string; goal: number; raised: bigint; donors: bigint; gifts: bigint }[]>`
-          SELECT c."title", c."status", c."goalAmount" AS goal,
-            COALESCE(SUM(d."amount" - d."refundedAmount") FILTER (WHERE d."status" IN ('SUCCESS','PARTIALLY_REFUNDED')), 0) AS raised,
-            COUNT(DISTINCT d."donorId") FILTER (WHERE d."status" IN ('SUCCESS','PARTIALLY_REFUNDED')) AS donors,
-            COUNT(d."id") FILTER (WHERE d."status" IN ('SUCCESS','PARTIALLY_REFUNDED')) AS gifts
-          FROM "Campaign" c LEFT JOIN "Donation" d ON d."campaignId" = c."id" AND COALESCE(d."paidAt", d."createdAt") >= ${from} AND COALESCE(d."paidAt", d."createdAt") < ${to}
-          GROUP BY c."id" ORDER BY raised DESC`;
-        rows = r.map((x) => ({ campaign: x.title, status: x.status, goal: x.goal / 100, raised: Number(x.raised) / 100, percent: x.goal ? Math.round((Number(x.raised) / x.goal) * 100) : 0, donors: Number(x.donors), gifts: Number(x.gifts) }));
+        const [campaigns, gifts] = await Promise.all([
+          prisma.campaign.findMany({ select: { id: true, title: true, status: true, goalAmount: true } }),
+          prisma.donation.findMany({ where: { campaignId: { not: null }, status: { in: ['SUCCESS', 'PARTIALLY_REFUNDED'] }, OR: [{ paidAt: inRange }, { paidAt: null, createdAt: inRange }] }, select: { campaignId: true, donorId: true, amount: true, refundedAmount: true } }),
+        ]);
+        rows = campaigns
+          .map((c) => {
+            const mine = gifts.filter((g) => g.campaignId === c.id);
+            const raised = mine.reduce((n, g) => n + g.amount - g.refundedAmount, 0);
+            return { campaign: c.title, status: c.status, goal: c.goalAmount / 100, raised: raised / 100, percent: c.goalAmount ? Math.round((raised / c.goalAmount) * 100) : 0, donors: new Set(mine.map((g) => g.donorId)).size, gifts: mine.length };
+          })
+          .sort((x, y) => y.raised - x.raised);
         columns = ['campaign', 'status', 'goal', 'raised', 'percent', 'donors', 'gifts'];
         break;
       }
       case 'volunteers': {
         if (!hasPermission(req.user, 'volunteers.view') && !hasPermission(req.user, 'volunteers.manage')) throw AppError.forbidden();
-        const r = await prisma.$queryRaw<{ name: string; city: string; status: string; minutes: bigint; assignments: bigint }[]>`
-          SELECT p."name", p."city", p."status", COALESCE(SUM(h."minutes"), 0) AS minutes, (SELECT COUNT(*) FROM "VolunteerAssignment" a WHERE a."profileId" = p."id") AS assignments
-          FROM "VolunteerProfile" p LEFT JOIN "VolunteerHours" h ON h."profileId" = p."id" AND h."date" >= ${from} AND h."date" < ${to}
-          WHERE p."status" <> 'APPLICANT' GROUP BY p."id" ORDER BY minutes DESC`;
-        rows = r.map((x) => ({ volunteer: x.name, city: x.city, status: x.status, hours: Math.round(Number(x.minutes) / 6) / 10, assignments: Number(x.assignments) }));
+        const profiles = await prisma.volunteerProfile.findMany({
+          where: { status: { not: 'APPLICANT' } },
+          select: { name: true, city: true, status: true, _count: { select: { assignments: true } }, hours: { where: { date: inRange }, select: { minutes: true } } },
+        });
+        rows = profiles
+          .map((p) => ({ volunteer: p.name, city: p.city, status: p.status, hours: Math.round(p.hours.reduce((n, h) => n + h.minutes, 0) / 6) / 10, assignments: p._count.assignments }))
+          .sort((x, y) => y.hours - x.hours);
         columns = ['volunteer', 'city', 'status', 'hours', 'assignments'];
         break;
       }
       case 'events': {
-        const r = await prisma.$queryRaw<{ title: string; startsAt: Date; status: string; capacity: number | null; confirmed: bigint; attended: bigint; volunteers: bigint }[]>`
-          SELECT e."title", e."startsAt", e."status", e."capacity",
-            COUNT(r."id") FILTER (WHERE r."status" = 'CONFIRMED' AND r."type" = 'ATTENDEE') AS confirmed,
-            COUNT(r."id") FILTER (WHERE r."attended") AS attended,
-            COUNT(r."id") FILTER (WHERE r."status" = 'CONFIRMED' AND r."type" = 'VOLUNTEER') AS volunteers
-          FROM "Event" e LEFT JOIN "EventRegistration" r ON r."eventId" = e."id"
-          WHERE e."startsAt" >= ${from} AND e."startsAt" < ${to} GROUP BY e."id" ORDER BY e."startsAt" DESC`;
-        rows = r.map((x) => ({ event: x.title, date: x.startsAt.toISOString().slice(0, 10), status: x.status, capacity: x.capacity ?? '', registered: Number(x.confirmed), attended: Number(x.attended), volunteers: Number(x.volunteers) }));
+        const events = await prisma.event.findMany({ where: { startsAt: inRange }, orderBy: { startsAt: 'desc' }, include: { registrations: { select: { status: true, type: true, attended: true } } } });
+        rows = events.map((e) => ({
+          event: e.title,
+          date: e.startsAt.toISOString().slice(0, 10),
+          status: e.status,
+          capacity: e.capacity ?? '',
+          registered: e.registrations.filter((r) => r.status === 'CONFIRMED' && r.type === 'ATTENDEE').length,
+          attended: e.registrations.filter((r) => r.attended).length,
+          volunteers: e.registrations.filter((r) => r.status === 'CONFIRMED' && r.type === 'VOLUNTEER').length,
+        }));
         columns = ['event', 'date', 'status', 'capacity', 'registered', 'attended', 'volunteers'];
         break;
       }
@@ -287,10 +309,17 @@ reportsRouter.get(
       }
       case 'assistance': {
         if (!hasPermission(req.user, 'beneficiaries.view') && !hasPermission(req.user, 'beneficiaries.manage')) throw AppError.forbidden();
-        const r = await prisma.$queryRaw<{ month: Date; type: string; unit: string; records: bigint; quantity: number; people: bigint }[]>`
-          SELECT date_trunc('month', "distributedAt") AS month, "type", "unit", COUNT(*) AS records, SUM("quantity") AS quantity, COUNT(DISTINCT "beneficiaryId") AS people
-          FROM "AssistanceRecord" WHERE "distributedAt" >= ${from} AND "distributedAt" < ${to} GROUP BY 1, 2, 3 ORDER BY 1, 2`;
-        rows = r.map((x) => ({ month: x.month.toISOString().slice(0, 7), type: x.type, quantity: Number(x.quantity), unit: x.unit, records: Number(x.records), people: Number(x.people) }));
+        const list = await prisma.assistanceRecord.findMany({ where: { distributedAt: inRange }, select: { distributedAt: true, type: true, unit: true, quantity: true, beneficiaryId: true } });
+        const groups = new Map<string, { month: string; type: string; quantity: number; unit: string; records: number; people: Set<string> }>();
+        for (const a of list) {
+          const key = `${month(a.distributedAt)}|${a.type}|${a.unit}`;
+          const g = groups.get(key) ?? { month: month(a.distributedAt), type: a.type, quantity: 0, unit: a.unit, records: 0, people: new Set<string>() };
+          g.quantity += a.quantity;
+          g.records++;
+          g.people.add(a.beneficiaryId);
+          groups.set(key, g);
+        }
+        rows = [...groups.values()].sort((x, y) => x.month.localeCompare(y.month) || x.type.localeCompare(y.type)).map(({ people, ...g }) => ({ ...g, people: people.size }));
         columns = ['month', 'type', 'quantity', 'unit', 'records', 'people'];
         break;
       }
@@ -338,13 +367,19 @@ notificationsRouter.get(
       orderBy: { createdAt: 'desc' },
       take: 30,
     });
-    res.json({ data: rows.map(({ readBy, ...n }) => ({ ...n, read: readBy.includes(req.user!.id) })), meta: { unread: rows.filter((n) => !n.readBy.includes(req.user!.id)).length } });
+    const me = req.user!.id;
+    res.json({ data: rows.map(({ readBy, ...n }) => ({ ...n, read: strings(readBy).includes(me) })), meta: { unread: rows.filter((n) => !strings(n.readBy).includes(me)).length } });
   }),
 );
 notificationsRouter.post(
   '/read-all',
   asyncHandler(async (req, res) => {
-    await prisma.$executeRaw`UPDATE "Notification" SET "readBy" = array_append("readBy", ${req.user!.id}) WHERE NOT (${req.user!.id} = ANY("readBy"))`;
+    const me = req.user!.id;
+    const perms = req.user!.roleKey === SUPER_ADMIN_ROLE ? ALL_PERMISSIONS : [...req.user!.permissions];
+    const rows = await prisma.notification.findMany({ where: { OR: [{ userId: me }, { userId: null, permission: { in: perms } }] }, select: { id: true, readBy: true } });
+    for (const n of rows.filter((x) => !strings(x.readBy).includes(me))) {
+      await prisma.notification.update({ where: { id: n.id }, data: { readBy: [...strings(n.readBy), me] } });
+    }
     res.json({ data: { ok: true } });
   }),
 );

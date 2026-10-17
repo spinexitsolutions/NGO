@@ -23,13 +23,16 @@ export function netRaisedWhere(where: Prisma.DonationWhereInput = {}) {
 }
 
 export async function campaignTotals(campaignIds: string[]) {
-  if (!campaignIds.length) return new Map<string, { raised: number; donors: number }>();
-  const rows = await prisma.$queryRaw<{ campaignId: string; raised: bigint; donors: bigint }[]>`
-    SELECT "campaignId", COALESCE(SUM("amount" - "refundedAmount"), 0) AS raised, COUNT(DISTINCT "donorId") AS donors
-    FROM "Donation"
-    WHERE "campaignId" IN (${Prisma.join(campaignIds)}) AND "status" IN ('SUCCESS', 'PARTIALLY_REFUNDED')
-    GROUP BY "campaignId"`;
-  return new Map(rows.map((r) => [r.campaignId, { raised: Number(r.raised), donors: Number(r.donors) }]));
+  const map = new Map<string, { raised: number; donors: number }>();
+  if (!campaignIds.length) return map;
+  const where = { campaignId: { in: campaignIds }, status: { in: [...COUNTED_STATUSES] } };
+  const [sums, donorPairs] = await Promise.all([
+    prisma.donation.groupBy({ by: ['campaignId'], where, _sum: { amount: true, refundedAmount: true } }),
+    prisma.donation.findMany({ where, distinct: ['campaignId', 'donorId'], select: { campaignId: true } }),
+  ]);
+  for (const s of sums) if (s.campaignId) map.set(s.campaignId, { raised: (s._sum.amount ?? 0) - (s._sum.refundedAmount ?? 0), donors: 0 });
+  for (const d of donorPairs) if (d.campaignId && map.has(d.campaignId)) map.get(d.campaignId)!.donors++;
+  return map;
 }
 
 // ─── Checkout ───────────────────────────────────────────────────────────────────

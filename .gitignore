@@ -9,3 +9,5 @@ server/private-uploads/
 *.log
 .DS_Store
 *.tsbuildinfo
+LOCAL-ADMIN.txt
+server/data/

@@ -9,7 +9,7 @@ import { contentVersion, getPublished } from '../services/config.service.js';
 import { campaignTotals, netRaisedWhere } from '../services/donation.service.js';
 import { readDraft } from '../services/page.service.js';
 import { AppError } from '../utils/AppError.js';
-import { asyncHandler, pageMeta, parse } from '../utils/http.js';
+import { asyncHandler, pageMeta, parse, strings } from '../utils/http.js';
 
 export const publicRouter = Router();
 
@@ -87,7 +87,7 @@ publicRouter.get(
     if (q.phase === 'completed') where.OR = [{ status: 'COMPLETED' }, { endDate: { lt: now } }];
     if (q.featured === 'true') where.isFeatured = true;
     if (q.cause) where.cause = { slug: q.cause };
-    if (q.q) where.AND = [{ OR: [{ title: { contains: q.q, mode: 'insensitive' } }, { summary: { contains: q.q, mode: 'insensitive' } }] }];
+    if (q.q) where.AND = [{ OR: [{ title: { contains: q.q } }, { summary: { contains: q.q } }] }];
     const rows = await prisma.campaign.findMany({ where, include: { cause: { select: { title: true, slug: true } } }, orderBy: [{ isFeatured: 'desc' }, { startDate: 'desc' }], take: q.limit });
     res.json({ data: await withTotals(rows) });
   }),
@@ -201,12 +201,17 @@ publicRouter.get(
     );
     const where: Prisma.BlogPostWhereInput = { status: 'PUBLISHED', publishedAt: { lte: new Date() } };
     if (q.category) where.category = { slug: q.category };
-    if (q.tag) where.tags = { has: q.tag };
-    if (q.q) where.OR = [{ title: { contains: q.q, mode: 'insensitive' } }, { excerpt: { contains: q.q, mode: 'insensitive' } }, { body: { contains: q.q, mode: 'insensitive' } }];
-    const [data, total, categories] = await Promise.all([
-      prisma.blogPost.findMany({ where, orderBy: { publishedAt: 'desc' }, skip: (q.page - 1) * q.limit, take: q.limit, include: { category: { select: { name: true, slug: true } } }, omit: { body: true } }),
+    if (q.q) where.OR = [{ title: { contains: q.q } }, { excerpt: { contains: q.q } }, { body: { contains: q.q } }];
+    const include = { category: { select: { name: true, slug: true } } };
+    const categories = await prisma.category.findMany({ where: { status: 'PUBLISHED' }, select: { name: true, slug: true }, orderBy: { name: 'asc' } });
+    if (q.tag) {
+      // Tags are a JSON list: filter in memory (blog volumes are small).
+      const all = (await prisma.blogPost.findMany({ where, orderBy: { publishedAt: 'desc' }, include, omit: { body: true } })).filter((p) => strings(p.tags).includes(q.tag!));
+      return res.json({ data: all.slice((q.page - 1) * q.limit, q.page * q.limit), meta: { ...pageMeta(q.page, q.limit, all.length), categories } });
+    }
+    const [data, total] = await Promise.all([
+      prisma.blogPost.findMany({ where, orderBy: { publishedAt: 'desc' }, skip: (q.page - 1) * q.limit, take: q.limit, include, omit: { body: true } }),
       prisma.blogPost.count({ where }),
-      prisma.category.findMany({ where: { status: 'PUBLISHED' }, select: { name: true, slug: true }, orderBy: { name: 'asc' } }),
     ]);
     res.json({ data, meta: { ...pageMeta(q.page, q.limit, total), categories } });
   }),
@@ -218,12 +223,14 @@ publicRouter.get(
     const post = await prisma.blogPost.findFirst({ where: { slug: req.params.slug, status: 'PUBLISHED', publishedAt: { lte: new Date() } }, include: { category: { select: { name: true, slug: true } } } });
     if (!post) throw AppError.notFound('Article not found');
     // Related: same category or shared tags.
-    const related = await prisma.blogPost.findMany({
-      where: { status: 'PUBLISHED', id: { not: post.id }, publishedAt: { lte: new Date() }, OR: [{ categoryId: post.categoryId ?? undefined }, { tags: { hasSome: post.tags } }] },
+    const tags = strings(post.tags);
+    const candidates = await prisma.blogPost.findMany({
+      where: { status: 'PUBLISHED', id: { not: post.id }, publishedAt: { lte: new Date() } },
       orderBy: { publishedAt: 'desc' },
-      take: 3,
+      take: 50,
       omit: { body: true },
     });
+    const related = candidates.filter((p) => (post.categoryId && p.categoryId === post.categoryId) || strings(p.tags).some((t) => tags.includes(t))).slice(0, 3);
     res.json({ data: { ...post, related } });
   }),
 );
@@ -232,7 +239,7 @@ publicRouter.get(
   '/search',
   asyncHandler(async (req, res) => {
     const { q } = parse(z.object({ q: z.string().trim().min(2).max(100) }), req.query);
-    const c = { contains: q, mode: 'insensitive' as const };
+    const c = { contains: q };
     const [causes, campaigns, projects, stories, posts, events, pages] = await Promise.all([
       prisma.cause.findMany({ where: { status: 'PUBLISHED', OR: [{ title: c }, { summary: c }] }, select: { slug: true, title: true, summary: true, coverImage: true }, take: 5 }),
       prisma.campaign.findMany({ where: { status: { in: ['ACTIVE', 'COMPLETED'] }, OR: [{ title: c }, { summary: c }] }, select: { slug: true, title: true, summary: true, coverImage: true }, take: 5 }),
