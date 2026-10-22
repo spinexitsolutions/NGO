@@ -20,16 +20,14 @@ COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY server/package.json server/
 COPY client/package.json client/
-RUN npm ci --omit=dev -w server --include-workspace-root=false && npm i --no-save prisma@6.19.3
+RUN npm ci --omit=dev -w server --include-workspace-root=false
 COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/server/prisma server/prisma
 COPY --from=build /app/node_modules/.prisma node_modules/.prisma
 COPY --from=build /app/client/dist client/dist
 WORKDIR /app/server
-RUN mkdir -p data uploads private-uploads && chown -R node:node /app/server
+RUN mkdir -p uploads private-uploads && chown -R node:node /app/server
 USER node
 EXPOSE 4000
-# Database = SQLite file in /app/server/data (mount a persistent volume there).
-ENV DATABASE_URL=file:../data/ngo.db
-# Apply pending migrations, then start.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+# Set DATABASE_URL to your MongoDB (e.g. Atlas). Collections and indexes are created on start.
+CMD ["node", "dist/index.js"]

@@ -3,7 +3,7 @@ import { logger } from '../config/logger.js';
 import { runScheduledPublishing } from '../services/page.service.js';
 
 /**
- * Lightweight in-process job loop. With a single-file SQLite database the app runs as one server
+ * Lightweight in-process job loop. The app is meant to run as one server
  * process, so an in-memory flag is enough to stop a task overlapping with itself.
  */
 const TASKS: { name: string; everyMs: number; run: () => Promise<unknown> }[] = [

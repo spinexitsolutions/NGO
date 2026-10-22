@@ -20,7 +20,7 @@ mediaRouter.get(
     const where: Record<string, unknown> = {};
     if (typeof req.query.kind === 'string' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(req.query.kind)) where.kind = req.query.kind;
     if (typeof req.query.folder === 'string' && req.query.folder) where.folder = req.query.folder;
-    if (q) where.OR = [{ filename: { contains: q } }, { alt: { contains: q } }, { caption: { contains: q } }];
+    if (q) where.OR = [{ filename: { contains: q, mode: 'insensitive' } }, { alt: { contains: q, mode: 'insensitive' } }, { caption: { contains: q, mode: 'insensitive' } }];
     const [data, total, folders] = await Promise.all([
       prisma.mediaAsset.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit }),
       prisma.mediaAsset.count({ where }),

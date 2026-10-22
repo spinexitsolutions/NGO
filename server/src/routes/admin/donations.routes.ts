@@ -39,12 +39,12 @@ function donationWhere(q: z.infer<typeof listQuery>): Prisma.DonationWhereInput 
   if (q.from || q.to) where.createdAt = { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lt: new Date(new Date(q.to).getTime() + 86_400_000) } : {}) };
   if (q.q)
     where.OR = [
-      { reference: { contains: q.q } },
-      { providerPaymentId: { contains: q.q } },
-      { offlineReference: { contains: q.q } },
-      { donor: { email: { contains: q.q } } },
-      { donor: { name: { contains: q.q } } },
-      { campaign: { title: { contains: q.q } } },
+      { reference: { contains: q.q, mode: 'insensitive' } },
+      { providerPaymentId: { contains: q.q, mode: 'insensitive' } },
+      { offlineReference: { contains: q.q, mode: 'insensitive' } },
+      { donor: { email: { contains: q.q, mode: 'insensitive' } } },
+      { donor: { name: { contains: q.q, mode: 'insensitive' } } },
+      { campaign: { title: { contains: q.q, mode: 'insensitive' } } },
     ];
   return where;
 }
@@ -239,7 +239,7 @@ adminDonorsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const q = parse(z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(25), q: z.string().max(200).optional(), format: z.enum(['json', 'csv']).default('json') }), req.query);
-    const where: Prisma.DonorWhereInput = q.q ? { OR: [{ name: { contains: q.q } }, { email: { contains: q.q } }, { phone: { contains: q.q } }] } : {};
+    const where: Prisma.DonorWhereInput = q.q ? { OR: [{ name: { contains: q.q, mode: 'insensitive' } }, { email: { contains: q.q, mode: 'insensitive' } }, { phone: { contains: q.q, mode: 'insensitive' } }] } : {};
     const donors = await prisma.donor.findMany({ where, orderBy: { createdAt: 'desc' }, skip: q.format === 'csv' ? 0 : (q.page - 1) * q.limit, take: q.format === 'csv' ? 50000 : q.limit });
     const ids = donors.map((d) => d.id);
     const totals = await prisma.donation.groupBy({ by: ['donorId'], where: { donorId: { in: ids }, status: { in: ['SUCCESS', 'PARTIALLY_REFUNDED'] } }, _sum: { amount: true, refundedAmount: true }, _count: true, _max: { paidAt: true } });

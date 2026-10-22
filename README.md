@@ -17,7 +17,7 @@ design and content** — without editing code or redeploying.
 | --- | --- | --- |
 | Frontend | React 18 + Vite + TypeScript, Tailwind CSS, Framer Motion, React Query, React Hook Form + Zod, Recharts, dnd-kit | Fast SPA with code splitting; CSS-variable theming lets the admin restyle everything at runtime |
 | Backend | Node.js + Express + TypeScript | Simple, well-understood, easy to host anywhere |
-| Database | **SQLite** (one file: `server/data/ngo.db`) + Prisma ORM (migrations in `server/prisma/migrations`) | Nothing to install; still relational with unique constraints for idempotency and transactions |
+| Database | **MongoDB** + Prisma ORM (`server/prisma/schema.prisma`) | Works locally with nothing to install (`npm run local` starts a private MongoDB) and in the cloud with MongoDB Atlas; unique indexes for idempotency, multi-document transactions |
 | Auth | Server-side sessions (opaque httpOnly cookie, hashed in DB) + double-submit CSRF + optional TOTP MFA | Revocable sessions, no tokens in JS, works for a same-origin SPA |
 | Payments | Razorpay (orders, subscriptions, refunds, webhooks) behind a provider interface; a local **sandbox** provider for development | Real signature verification path in both modes |
 | Media | Local disk (dev) or Cloudinary (prod); images re-encoded to WebP with responsive variants by `sharp` | Safe uploads (content sniffing, metadata stripped) and fast delivery |
@@ -47,8 +47,8 @@ ngo/
 │           collections.ts (CMS content types) · fields.ts (field defs → Zod) · forms.ts · money.ts
 ├─ scripts/local.mjs       `npm run local` — one-command setup & run on a laptop
 ├─ server/                 Express + Prisma REST API  (/api/v1)
-│  ├─ data/                SQLite database file (created automatically, not committed)
-│  ├─ prisma/              schema.prisma + migrations
+│  ├─ data/                local MongoDB data (created automatically, not committed)
+│  ├─ prisma/              schema.prisma (collections and indexes are created on start)
 │  ├─ src/config/          env (validated), db, logger
 │  ├─ src/middleware/      sessions/RBAC, CSRF, rate limits, uploads (magic-byte sniffing), errors
 │  ├─ src/services/        auth, config (draft/publish), pages, collections, media/storage,
@@ -56,7 +56,7 @@ ngo/
 │  ├─ src/routes/          public, forms, donations/webhooks/donor portal, seo (sitemap/robots), admin/*
 │  ├─ src/jobs/            scheduled publishing & cleanup
 │  ├─ src/scripts/         seed, create-admin
-│  └─ tests/               Vitest + Supertest against a separate SQLite test database
+│  └─ tests/               Vitest + Supertest against a separate throwaway MongoDB
 ├─ client/                 React SPA
 │  └─ src/  app/ (SiteProvider = theme engine, AuthProvider) · components/ui (design system)
 │           components/site (layout, images, motion, cards, forms, SEO) · features/sections (renderers)
@@ -103,17 +103,22 @@ npm install
 npm run local
 ```
 
-`npm run local` does everything on the first run: creates `server/.env` with a fresh secret, creates the
-database file `server/data/ngo.db`, adds the labelled sample content, creates an admin account and prints its
-email and password (also saved in `LOCAL-ADMIN.txt`), then starts the API and the website.
+`npm run local` does everything on the first run: creates `server/.env` with a fresh secret, starts a
+private MongoDB (the program is downloaded once, ~100 MB, so the first run needs internet and takes a minute;
+data is kept in `server/data/mongo`), adds the labelled sample content, creates an admin account and prints
+its email and password (also saved in `LOCAL-ADMIN.txt`), then starts the API and the website.
 
 - Website: http://localhost:5173
 - Admin panel: http://localhost:5173/admin
 
-Next time just run `npm run local` again (your data stays in `server/data/ngo.db`). Stop with **Ctrl+C**.
+Next time just run `npm run local` again (your data stays in `server/data/mongo`). Stop with **Ctrl+C**.
 To start over with a clean database, stop the app and delete the `server/data` folder.
 
-Manual steps, if you prefer: `cp server/.env.example server/.env` (set `APP_SECRET`), `npm run db:deploy`,
+To use your own MongoDB instead (MongoDB Atlas free tier, or one you installed), put its URL in
+`DATABASE_URL` in `server/.env`; `npm run local` then uses it and does not start its own. It must be a replica
+set (Atlas always is; a self-installed server needs `--replSet rs0` and `rs.initiate()` once).
+
+Manual steps, if you prefer: `cp server/.env.example server/.env` (set `APP_SECRET` and `DATABASE_URL`),
 `npm run seed` (`-- --no-sample` to skip sample content), `npm run create-admin -- --email you@org --name "You"`,
 `npm run dev`.
 
@@ -129,7 +134,7 @@ See `server/.env.example` for every variable. Key ones:
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | SQLite file, default `file:../data/ngo.db` (relative to `server/prisma/`, i.e. `server/data/ngo.db`) |
+| `DATABASE_URL` | MongoDB URL (must be a replica set). Default: the private local MongoDB on `127.0.0.1:27027` that `npm run local` starts |
 | `APP_SECRET` | ≥32 random chars (`openssl rand -hex 32`); encrypts MFA secrets, signs donor sessions |
 | `PUBLIC_SITE_URL` | Public URL used in emails, receipts and the sitemap |
 | `COOKIE_SECURE` | `true` behind HTTPS |
@@ -165,12 +170,12 @@ authorised staff; mount that directory on persistent storage.
 ## 5. Testing
 
 ```bash
-npm test                        # shared + server (API against a SQLite test file) + client
+npm test                        # shared + server (API against a throwaway MongoDB) + client
 npm run typecheck
 ```
 
-Tests use a separate database file (`server/data/test.db`) and refuse to run against a database whose
-name does not contain `test`.
+Tests start their own throwaway MongoDB (or use `TEST_DATABASE_URL` if set) and refuse to run against a
+database whose name does not contain `test`.
 The server suite (53 tests) covers login, lockout, MFA, password reset, CSRF, RBAC on every sensitive
 area, theme publish/restore/reset, page publish validation, scheduled publishing, donation checkout
 validation, sandbox payment, signature rejection, idempotent verification, duplicate webhooks, amount
@@ -181,18 +186,18 @@ safety and usage tracking, and public-API privacy.
 ## 6. Deployment
 
 See [docs/deployment.md](docs/deployment.md). In short: build the Docker image (`Dockerfile` serves the
-API and the built website from one origin), mount a persistent volume for `server/data`, set the environment variables, run
+API and the built website from one origin), point `DATABASE_URL` at MongoDB (e.g. Atlas), set the environment variables, run
 `npm run create-admin` once, put it behind HTTPS and set `COOKIE_SECURE=true`.
 
 ## 7. Backups & maintenance
 
-- **Database**: the whole database is `server/data/ngo.db`. Back it up by copying that file while the app is
-  stopped (or with `sqlite3 server/data/ngo.db ".backup backup-$(date +%F).db"` while running) and keep copies
-  off the machine. Restore = stop the app and put the file back.
+- **Database**: on MongoDB Atlas turn on its automatic backups. Otherwise use
+  `mongodump --uri "$DATABASE_URL" --out backup-$(date +%F)` and keep copies off the machine; restore with
+  `mongorestore`. For the local private MongoDB you can also copy `server/data/mongo` while the app is stopped.
 - **Media**: Cloudinary keeps originals; enable backups on your Cloudinary plan or sync to object storage.
   Back up the private-uploads volume (volunteer CVs).
-- **Updates**: `npm outdated`, update in a branch, run `npm test`, deploy. Apply migrations with
-  `npm run db:deploy` (the Docker image does this on start).
+- **Updates**: `npm outdated`, update in a branch, run `npm test`, deploy. New collections and indexes from
+  schema changes are created automatically when the app starts.
 - **Retention**: expired sessions/tokens and abandoned (24 h) pending checkouts are cleaned automatically.
   Use *Admin → Donors → Erase personal data* for erasure requests (financial records are kept, anonymised).
 
@@ -202,8 +207,8 @@ API and the built website from one origin), mount a persistent volume for `serve
   it has **not** been exercised against live Razorpay servers from this environment — test with your test
   keys before going live.
 - Docker image and Cloudinary/SMTP drivers are implemented but were not run in this environment.
-- SQLite suits one server and normal NGO traffic. For many concurrent editors or multiple servers, move to
-  PostgreSQL by changing the Prisma provider and generating a new migration (queries avoid database-specific SQL).
+- MongoDB must run as a replica set (Prisma uses transactions). MongoDB Atlas always is; `npm run local`
+  and `docker compose` set this up for you.
 - Multilingual: the architecture and settings support a language switcher, but page content is single
   language; per-locale content would add a `locale` to pages/collections.
 - Stock photography (Unsplash) is used for sample content; replace it with your own photographs taken

@@ -9,15 +9,14 @@ import { hashPassword } from '../src/services/auth.service.js';
 export const app: Express = createApp();
 export const PASSWORD = 'Correct-horse-42';
 
-const KEEP = new Set(['Permission', 'Role', 'RolePermission', '_prisma_migrations']);
+const KEEP = new Set(['Permission', 'Role', 'RolePermission']);
 
-/** Empties every table except roles/permissions, which are (re)created once. */
+/** Empties every collection except roles/permissions, which are (re)created once. */
 export async function resetDb() {
   if (!/test/.test(process.env.DATABASE_URL ?? '')) throw new Error('resetDb only runs against a test database');
-  const tables = await prisma.$queryRawUnsafe<{ name: string }[]>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`);
-  await prisma.$executeRawUnsafe('PRAGMA foreign_keys = OFF');
-  for (const { name } of tables) if (!KEEP.has(name)) await prisma.$executeRawUnsafe(`DELETE FROM "${name}"`);
-  await prisma.$executeRawUnsafe('PRAGMA foreign_keys = ON');
+  const list = (await prisma.$runCommandRaw({ listCollections: 1, nameOnly: true })) as { cursor: { firstBatch: { name: string }[] } };
+  for (const { name } of list.cursor.firstBatch)
+    if (!KEEP.has(name) && !name.startsWith('system.')) await prisma.$runCommandRaw({ delete: name, deletes: [{ q: {}, limit: 0 }] });
   clearConfigCache();
   await prisma.role.deleteMany({ where: { isSystem: false } });
   if (!(await prisma.role.count())) {

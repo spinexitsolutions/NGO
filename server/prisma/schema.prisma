@@ -1,5 +1,6 @@
-// NGO platform database schema (SQLite — the whole database is one file, no server to install).
-// Lists of strings are stored as JSON arrays.
+// NGO platform database schema (MongoDB). Prisma needs MongoDB running as a replica set
+// (a single-node one is fine) because it uses transactions; MongoDB Atlas is one by default.
+// Lists of strings are stored as JSON arrays. Ids are cuid strings stored in `_id`.
 // Money is always stored as integer minor units (paise for INR) in `Int` columns.
 // Donation totals are computed from Donation rows with status SUCCESS — never from editable fields.
 
@@ -8,14 +9,14 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
 // ─── Identity & access ────────────────────────────────────────────────────────────
 
 model User {
-  id               String    @id @default(cuid())
+  id               String    @id @map("_id") @default(cuid())
   email            String    @unique
   name             String
   passwordHash     String
@@ -40,7 +41,7 @@ model User {
 }
 
 model Role {
-  id          String           @id @default(cuid())
+  id          String           @id @map("_id") @default(cuid())
   key         String           @unique
   name        String
   description String           @default("")
@@ -52,23 +53,24 @@ model Role {
 }
 
 model Permission {
-  key         String           @id
+  key         String           @id @map("_id")
   group       String
   description String
   roles       RolePermission[]
 }
 
 model RolePermission {
+  id            String     @id @default(cuid()) @map("_id")
   roleId        String
   permissionKey String
   role          Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission    Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
 
-  @@id([roleId, permissionKey])
+  @@unique([roleId, permissionKey])
 }
 
 model Session {
-  id         String    @id @default(cuid())
+  id         String    @id @map("_id") @default(cuid())
   tokenHash  String    @unique // sha256 of the opaque cookie token
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -85,7 +87,7 @@ model Session {
 }
 
 model PasswordResetToken {
-  id        String    @id @default(cuid())
+  id        String    @id @map("_id") @default(cuid())
   tokenHash String    @unique
   userId    String
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -101,7 +103,7 @@ model PasswordResetToken {
 /// One row per configuration document: key = "theme" | "settings" | "navigation".
 /// The public site renders `published`; admins edit `draft` and publish it.
 model ConfigDocument {
-  key            String   @id
+  key            String   @id @map("_id")
   draft          Json
   published      Json
   version        Int      @default(1)
@@ -112,7 +114,7 @@ model ConfigDocument {
 }
 
 model ConfigVersion {
-  id          String         @id @default(cuid())
+  id          String         @id @map("_id") @default(cuid())
   key         String
   config      ConfigDocument @relation(fields: [key], references: [key], onDelete: Cascade)
   version     Int
@@ -126,7 +128,7 @@ model ConfigVersion {
 
 /// Global counter used for content cache-busting and sequential numbers (receipts).
 model Counter {
-  key   String @id
+  key   String @id @map("_id")
   value Int    @default(0)
 }
 
@@ -140,7 +142,7 @@ enum PageStatus {
 }
 
 model Page {
-  id                 String        @id @default(cuid())
+  id                 String        @id @map("_id") @default(cuid())
   slug               String        @unique
   isSystem           Boolean       @default(false) // system pages cannot be deleted or re-slugged
   status             PageStatus    @default(DRAFT)
@@ -148,7 +150,7 @@ model Page {
   showInSitemap      Boolean       @default(true)
   scheduledAt        DateTime?
   publishedVersionId String?       @unique
-  publishedVersion   PageVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id])
+  publishedVersion   PageVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   versions           PageVersion[] @relation("PageVersions")
   updatedById        String?
   createdAt          DateTime      @default(now())
@@ -156,7 +158,7 @@ model Page {
 }
 
 model PageVersion {
-  id          String   @id @default(cuid())
+  id          String   @id @map("_id") @default(cuid())
   pageId      String
   page        Page     @relation("PageVersions", fields: [pageId], references: [id], onDelete: Cascade)
   version     Int
@@ -171,7 +173,7 @@ model PageVersion {
 
 /// Reusable section presets that editors can insert into any page.
 model SectionTemplate {
-  id        String   @id @default(cuid())
+  id        String   @id @map("_id") @default(cuid())
   name      String
   type      String
   section   Json
@@ -185,7 +187,7 @@ enum MediaKind {
 }
 
 model MediaAsset {
-  id           String    @id @default(cuid())
+  id           String    @id @map("_id") @default(cuid())
   kind         MediaKind
   provider     String // "local" | "cloudinary"
   storageKey   String    @unique
@@ -217,7 +219,7 @@ enum PublishStatus {
 }
 
 model Cause {
-  id             String        @id @default(cuid())
+  id             String        @id @map("_id") @default(cuid())
   slug           String        @unique
   title          String
   summary        String
@@ -252,7 +254,7 @@ enum CampaignStatus {
 }
 
 model Campaign {
-  id               String         @id @default(cuid())
+  id               String         @id @map("_id") @default(cuid())
   slug             String         @unique
   title            String
   summary          String
@@ -286,7 +288,7 @@ model Campaign {
 }
 
 model CampaignUpdate {
-  id          String        @id @default(cuid())
+  id          String        @id @map("_id") @default(cuid())
   campaignId  String
   campaign    Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   title       String
@@ -307,7 +309,7 @@ enum ProjectPhase {
 }
 
 model Project {
-  id                    String        @id @default(cuid())
+  id                    String        @id @map("_id") @default(cuid())
   slug                  String        @unique
   title                 String
   summary               String
@@ -355,7 +357,7 @@ enum ProjectReportKind {
 }
 
 model ProjectReport {
-  id          String            @id @default(cuid())
+  id          String            @id @map("_id") @default(cuid())
   projectId   String
   project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   title       String
@@ -372,7 +374,7 @@ model ProjectReport {
 }
 
 model Story {
-  id              String        @id @default(cuid())
+  id              String        @id @map("_id") @default(cuid())
   slug            String        @unique
   title           String
   excerpt         String
@@ -398,7 +400,7 @@ model Story {
 }
 
 model Testimonial {
-  id              String        @id @default(cuid())
+  id              String        @id @map("_id") @default(cuid())
   quote           String
   author          String
   role            String        @default("")
@@ -420,7 +422,7 @@ enum TeamGroup {
 }
 
 model TeamMember {
-  id          String        @id @default(cuid())
+  id          String        @id @map("_id") @default(cuid())
   name        String
   title       String
   group       TeamGroup     @default(STAFF)
@@ -443,7 +445,7 @@ enum PartnerType {
 }
 
 model Partner {
-  id          String        @id @default(cuid())
+  id          String        @id @map("_id") @default(cuid())
   name        String
   type        PartnerType   @default(CORPORATE)
   logo        String        @default("")
@@ -457,7 +459,7 @@ model Partner {
 }
 
 model ImpactStat {
-  id         String        @id @default(cuid())
+  id         String        @id @map("_id") @default(cuid())
   label      String
   value      Float
   prefix     String        @default("")
@@ -473,7 +475,7 @@ model ImpactStat {
 }
 
 model Faq {
-  id        String        @id @default(cuid())
+  id        String        @id @map("_id") @default(cuid())
   question  String
   answer    String
   category  String        @default("")
@@ -494,7 +496,7 @@ enum DocumentType {
 }
 
 model Document {
-  id          String        @id @default(cuid())
+  id          String        @id @map("_id") @default(cuid())
   title       String
   type        DocumentType  @default(ANNUAL_REPORT)
   year        String        @default("")
@@ -508,7 +510,7 @@ model Document {
 }
 
 model GalleryAlbum {
-  id          String        @id @default(cuid())
+  id          String        @id @map("_id") @default(cuid())
   slug        String        @unique
   title       String
   description String        @default("")
@@ -528,7 +530,7 @@ enum JobType {
 }
 
 model JobOpening {
-  id          String        @id @default(cuid())
+  id          String        @id @map("_id") @default(cuid())
   slug        String        @unique
   title       String
   type        JobType       @default(JOB)
@@ -543,7 +545,7 @@ model JobOpening {
 }
 
 model Category {
-  id          String        @id @default(cuid())
+  id          String        @id @map("_id") @default(cuid())
   slug        String        @unique
   name        String
   description String        @default("")
@@ -562,7 +564,7 @@ enum PostStatus {
 }
 
 model BlogPost {
-  id             String     @id @default(cuid())
+  id             String     @id @map("_id") @default(cuid())
   slug           String     @unique
   title          String
   excerpt        String
@@ -594,7 +596,7 @@ enum EventStatus {
 }
 
 model Event {
-  id               String      @id @default(cuid())
+  id               String      @id @map("_id") @default(cuid())
   slug             String      @unique
   title            String
   summary          String
@@ -642,7 +644,7 @@ enum RegistrationStatus {
 }
 
 model EventRegistration {
-  id          String             @id @default(cuid())
+  id          String             @id @map("_id") @default(cuid())
   reference   String             @unique
   eventId     String
   event       Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
@@ -665,7 +667,7 @@ model EventRegistration {
 // ─── Donations & payments ─────────────────────────────────────────────────────────
 
 model Donor {
-  id                 String    @id @default(cuid())
+  id                 String    @id @map("_id") @default(cuid())
   email              String    @unique
   name               String
   phone              String    @default("")
@@ -684,7 +686,7 @@ model Donor {
 
 /// Passwordless (magic link) login for the donor portal.
 model DonorLoginToken {
-  id        String    @id @default(cuid())
+  id        String    @id @map("_id") @default(cuid())
   tokenHash String    @unique
   donorId   String
   donor     Donor     @relation(fields: [donorId], references: [id], onDelete: Cascade)
@@ -717,7 +719,7 @@ enum PaymentMethod {
 }
 
 model Donation {
-  id                String            @id @default(cuid())
+  id                String            @id @map("_id") @default(cuid())
   reference         String            @unique
   donorId           String
   donor             Donor             @relation(fields: [donorId], references: [id])
@@ -773,7 +775,7 @@ enum RecurringStatus {
 }
 
 model RecurringDonation {
-  id                     String          @id @default(cuid())
+  id                     String          @id @map("_id") @default(cuid())
   reference              String          @unique
   donorId                String
   donor                  Donor           @relation(fields: [donorId], references: [id])
@@ -795,7 +797,7 @@ model RecurringDonation {
 
 /// Append-only ledger of everything the payment provider told us about a donation.
 model PaymentTransaction {
-  id         String   @id @default(cuid())
+  id         String   @id @map("_id") @default(cuid())
   donationId String
   donation   Donation @relation(fields: [donationId], references: [id], onDelete: Cascade)
   provider   String
@@ -811,7 +813,7 @@ model PaymentTransaction {
 
 /// Every webhook delivery we accept is stored once; the unique key makes processing idempotent.
 model WebhookEvent {
-  id          String    @id @default(cuid())
+  id          String    @id @map("_id") @default(cuid())
   provider    String
   eventId     String
   type        String
@@ -831,7 +833,7 @@ enum RefundStatus {
 }
 
 model Refund {
-  id               String       @id @default(cuid())
+  id               String       @id @map("_id") @default(cuid())
   donationId       String
   donation         Donation     @relation(fields: [donationId], references: [id], onDelete: Cascade)
   amount           Int
@@ -849,7 +851,7 @@ enum ReceiptStatus {
 }
 
 model Receipt {
-  id             String        @id @default(cuid())
+  id             String        @id @map("_id") @default(cuid())
   receiptNumber  String        @unique
   donationId     String
   donation       Donation      @relation(fields: [donationId], references: [id], onDelete: Cascade)
@@ -861,7 +863,7 @@ model Receipt {
   voidReason     String        @default("")
   voidedById     String?
   replacesId     String?       @unique // correction: new receipt replacing a voided one
-  replaces       Receipt?      @relation("ReceiptCorrection", fields: [replacesId], references: [id])
+  replaces       Receipt?      @relation("ReceiptCorrection", fields: [replacesId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   replacedBy     Receipt?      @relation("ReceiptCorrection")
   createdAt      DateTime      @default(now())
 
@@ -871,7 +873,7 @@ model Receipt {
 // ─── Volunteers ───────────────────────────────────────────────────────────────────
 
 model VolunteerProfile {
-  id                String    @id @default(cuid())
+  id                String    @id @map("_id") @default(cuid())
   email             String    @unique
   name              String
   phone             String
@@ -897,7 +899,7 @@ model VolunteerProfile {
 }
 
 model VolunteerOpportunity {
-  id          String    @id @default(cuid())
+  id          String    @id @map("_id") @default(cuid())
   slug        String    @unique
   title       String
   summary     String
@@ -932,7 +934,7 @@ enum ApplicationStatus {
 }
 
 model VolunteerApplication {
-  id            String                @id @default(cuid())
+  id            String                @id @map("_id") @default(cuid())
   reference     String                @unique
   profileId     String
   profile       VolunteerProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
@@ -950,7 +952,7 @@ model VolunteerApplication {
 }
 
 model VolunteerAssignment {
-  id            String                @id @default(cuid())
+  id            String                @id @map("_id") @default(cuid())
   profileId     String
   profile       VolunteerProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
   projectId     String?
@@ -971,7 +973,7 @@ model VolunteerAssignment {
 }
 
 model VolunteerHours {
-  id           String               @id @default(cuid())
+  id           String               @id @map("_id") @default(cuid())
   profileId    String
   profile      VolunteerProfile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
   assignmentId String?
@@ -988,7 +990,7 @@ model VolunteerHours {
 // ─── Beneficiaries (private) ──────────────────────────────────────────────────────
 
 model Beneficiary {
-  id             String    @id @default(cuid())
+  id             String    @id @map("_id") @default(cuid())
   code           String    @unique // internal ID, e.g. BEN-000123
   fullName       String
   gender         String    @default("")
@@ -1016,7 +1018,7 @@ model Beneficiary {
 }
 
 model AssistanceRecord {
-  id            String      @id @default(cuid())
+  id            String      @id @map("_id") @default(cuid())
   beneficiaryId String
   beneficiary   Beneficiary @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
   projectId     String?
@@ -1035,7 +1037,7 @@ model AssistanceRecord {
 }
 
 model CaseNote {
-  id            String      @id @default(cuid())
+  id            String      @id @map("_id") @default(cuid())
   beneficiaryId String
   beneficiary   Beneficiary @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
   note          String
@@ -1054,7 +1056,7 @@ enum InquiryStatus {
 }
 
 model ContactInquiry {
-  id           String        @id @default(cuid())
+  id           String        @id @map("_id") @default(cuid())
   type         String        @default("GENERAL")
   name         String
   email        String
@@ -1078,7 +1080,7 @@ enum SubscriberStatus {
 }
 
 model NewsletterSubscriber {
-  id               String           @id @default(cuid())
+  id               String           @id @map("_id") @default(cuid())
   email            String           @unique
   name             String           @default("")
   status           SubscriberStatus @default(SUBSCRIBED)
@@ -1090,7 +1092,7 @@ model NewsletterSubscriber {
 }
 
 model EmailTemplate {
-  key         String   @id
+  key         String   @id @map("_id")
   name        String
   description String   @default("")
   subject     String
@@ -1103,7 +1105,7 @@ model EmailTemplate {
 
 /// Log of every outgoing email (transactional and marketing).
 model EmailLog {
-  id          String   @id @default(cuid())
+  id          String   @id @map("_id") @default(cuid())
   to          String
   templateKey String
   subject     String
@@ -1119,7 +1121,7 @@ model EmailLog {
 
 /// In-app admin alerts.
 model Notification {
-  id        String    @id @default(cuid())
+  id        String    @id @map("_id") @default(cuid())
   userId    String?
   user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
   permission String   @default("") // broadcast to staff holding this permission when userId is null
@@ -1134,7 +1136,7 @@ model Notification {
 }
 
 model InternalNote {
-  id         String   @id @default(cuid())
+  id         String   @id @map("_id") @default(cuid())
   entityType String // Donation | VolunteerApplication | ContactInquiry | Donor | ...
   entityId   String
   body       String
@@ -1146,7 +1148,7 @@ model InternalNote {
 }
 
 model AuditLog {
-  id         String   @id @default(cuid())
+  id         String   @id @map("_id") @default(cuid())
   actorId    String?
   actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
   action     String // e.g. "donation.offline_recorded", "theme.published"

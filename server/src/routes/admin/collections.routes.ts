@@ -42,7 +42,7 @@ collectionsRouter.get(
     const { page, limit, q } = parse(paginationSchema, req.query);
     const where: Record<string, unknown> = {};
     if (typeof req.query.status === 'string' && req.query.status) where.status = req.query.status;
-    if (q) where.OR = def.searchFields.map((f) => ({ [f]: { contains: q } }));
+    if (q) where.OR = def.searchFields.map((f) => ({ [f]: { contains: q, mode: 'insensitive' } }));
     // Optional relation filter, e.g. ?campaignId=...
     for (const f of def.fields.filter((x) => x.type === 'relation')) {
       if (typeof req.query[f.name] === 'string') where[f.name] = req.query[f.name];

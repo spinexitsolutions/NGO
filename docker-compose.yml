@@ -1,19 +1,31 @@
-# Production-like single container. The database is a SQLite file kept on the `data` volume.
+# Production-like setup: the app plus MongoDB (run as a one-node replica set, which Prisma needs).
 services:
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo:/data/db
+    healthcheck:
+      # Sets up the replica set on first start, then reports healthy once it accepts writes.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) } quit(db.hello().isWritablePrimary ? 0 : 1)"]
+      interval: 5s
+      retries: 30
   app:
     build: .
     ports: ["4000:4000"]
     env_file: server/.env
     environment:
-      DATABASE_URL: file:../data/ngo.db
+      DATABASE_URL: mongodb://mongo:27017/ngo?replicaSet=rs0
       NODE_ENV: production
       PUBLIC_SITE_URL: http://localhost:4000
       COOKIE_SECURE: "false"
+    depends_on:
+      mongo:
+        condition: service_healthy
     volumes:
-      - data:/app/server/data
       - uploads:/app/server/uploads
       - private:/app/server/private-uploads
 volumes:
-  data:
+  mongo:
   uploads:
   private:

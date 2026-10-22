@@ -9,7 +9,7 @@
  */
 import type { Prisma } from '@prisma/client';
 import { ALL_PERMISSIONS, DEFAULT_ROLES, PERMISSIONS } from '@ngo/shared';
-import { prisma } from '../config/db.js';
+import { prisma, syncDatabase } from '../config/db.js';
 import { getPublished } from '../services/config.service.js';
 import { IMAGES, SEED_CAUSES, SEED_PAGES } from './seedContent.js';
 
@@ -285,6 +285,7 @@ async function seedSample() {
 }
 
 async function main() {
+  await syncDatabase();
   await seedAccess();
   await seedConfig();
   await seedPages();

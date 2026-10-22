@@ -6,7 +6,7 @@
  */
 import readline from 'node:readline/promises';
 import { SUPER_ADMIN_ROLE } from '@ngo/shared';
-import { prisma } from '../config/db.js';
+import { prisma, syncDatabase } from '../config/db.js';
 import { hashPassword, passwordSchema } from '../services/auth.service.js';
 
 function arg(name: string) {
@@ -15,6 +15,7 @@ function arg(name: string) {
 }
 
 async function main() {
+  await syncDatabase();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const email = (arg('email') ?? (await rl.question('Email: '))).trim().toLowerCase();
   const name = (arg('name') ?? (await rl.question('Full name: '))).trim();

@@ -41,7 +41,7 @@ adminVolunteersRouter.get(
     const where: Prisma.VolunteerApplicationWhereInput = {};
     if (q.status) where.status = q.status;
     if (q.opportunityId) where.opportunityId = q.opportunityId;
-    if (q.q) where.OR = [{ reference: { contains: q.q } }, { profile: { name: { contains: q.q } } }, { profile: { email: { contains: q.q } } }, { profile: { city: { contains: q.q } } }];
+    if (q.q) where.OR = [{ reference: { contains: q.q, mode: 'insensitive' } }, { profile: { name: { contains: q.q, mode: 'insensitive' } } }, { profile: { email: { contains: q.q, mode: 'insensitive' } } }, { profile: { city: { contains: q.q, mode: 'insensitive' } } }];
     const [data, total, counts] = await Promise.all([
       prisma.volunteerApplication.findMany({
         where,
@@ -120,7 +120,7 @@ adminVolunteersRouter.get(
     );
     const where: Prisma.VolunteerProfileWhereInput = {};
     if (q.status) where.status = q.status;
-    if (q.q) where.OR = [{ name: { contains: q.q } }, { email: { contains: q.q } }, { city: { contains: q.q } }];
+    if (q.q) where.OR = [{ name: { contains: q.q, mode: 'insensitive' } }, { email: { contains: q.q, mode: 'insensitive' } }, { city: { contains: q.q, mode: 'insensitive' } }];
     const take = q.format === 'csv' ? 20000 : q.limit;
     const rows = await prisma.volunteerProfile.findMany({ where, orderBy: { createdAt: 'desc' }, skip: q.format === 'csv' ? 0 : (q.page - 1) * q.limit, take, omit: { resumeKey: true } });
     const hours = await prisma.volunteerHours.groupBy({ by: ['profileId'], where: { profileId: { in: rows.map((r) => r.id) } }, _sum: { minutes: true } });

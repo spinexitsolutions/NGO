@@ -13,9 +13,13 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   let e: AppError;
   if (err instanceof AppError) e = err;
   else if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-    const target = (err.meta?.target as string[] | undefined)?.join(', ') ?? 'value';
+    // A list of fields, or an index name such as "Donor_email_key" (MongoDB).
+    const raw = err.meta?.target;
+    const target = Array.isArray(raw) ? raw.join(', ') : typeof raw === 'string' ? raw.replace(/^[^_]+_(.+)_key$/, '$1').replace(/_/g, ', ') : 'value';
     e = AppError.conflict(`A record with this ${target} already exists`, [{ path: target, message: 'Already in use' }]);
   } else if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') e = AppError.notFound();
+  else if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034')
+    e = AppError.conflict('Someone else changed this at the same moment. Please try again.');
   else if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003')
     e = AppError.conflict('This record is still referenced by other data');
   else if (err instanceof MulterError) e = AppError.badRequest(err.code === 'LIMIT_FILE_SIZE' ? 'File is too large' : err.message);

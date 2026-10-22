@@ -347,7 +347,7 @@ auditRouter.get(
     if (q.entityType) where.entityType = q.entityType;
     if (q.entityId) where.entityId = q.entityId;
     if (q.actorId) where.actorId = q.actorId;
-    if (q.action) where.action = { contains: q.action };
+    if (q.action) where.action = { contains: q.action, mode: 'insensitive' };
     const [data, total] = await Promise.all([
       prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (q.page - 1) * 50, take: 50, include: { actor: { select: { name: true, email: true } } } }),
       prisma.auditLog.count({ where }),

@@ -23,7 +23,7 @@ export function clientIp(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? '';
 }
 
-/** JSON columns hold string lists (SQLite has no array type). */
+/** JSON fields hold string lists; this reads one safely. */
 export function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }

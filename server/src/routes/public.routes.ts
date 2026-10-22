@@ -87,7 +87,7 @@ publicRouter.get(
     if (q.phase === 'completed') where.OR = [{ status: 'COMPLETED' }, { endDate: { lt: now } }];
     if (q.featured === 'true') where.isFeatured = true;
     if (q.cause) where.cause = { slug: q.cause };
-    if (q.q) where.AND = [{ OR: [{ title: { contains: q.q } }, { summary: { contains: q.q } }] }];
+    if (q.q) where.AND = [{ OR: [{ title: { contains: q.q, mode: 'insensitive' } }, { summary: { contains: q.q, mode: 'insensitive' } }] }];
     const rows = await prisma.campaign.findMany({ where, include: { cause: { select: { title: true, slug: true } } }, orderBy: [{ isFeatured: 'desc' }, { startDate: 'desc' }], take: q.limit });
     res.json({ data: await withTotals(rows) });
   }),
@@ -201,7 +201,7 @@ publicRouter.get(
     );
     const where: Prisma.BlogPostWhereInput = { status: 'PUBLISHED', publishedAt: { lte: new Date() } };
     if (q.category) where.category = { slug: q.category };
-    if (q.q) where.OR = [{ title: { contains: q.q } }, { excerpt: { contains: q.q } }, { body: { contains: q.q } }];
+    if (q.q) where.OR = [{ title: { contains: q.q, mode: 'insensitive' } }, { excerpt: { contains: q.q, mode: 'insensitive' } }, { body: { contains: q.q, mode: 'insensitive' } }];
     const include = { category: { select: { name: true, slug: true } } };
     const categories = await prisma.category.findMany({ where: { status: 'PUBLISHED' }, select: { name: true, slug: true }, orderBy: { name: 'asc' } });
     if (q.tag) {
@@ -239,7 +239,7 @@ publicRouter.get(
   '/search',
   asyncHandler(async (req, res) => {
     const { q } = parse(z.object({ q: z.string().trim().min(2).max(100) }), req.query);
-    const c = { contains: q };
+    const c = { contains: q, mode: 'insensitive' as const };
     const [causes, campaigns, projects, stories, posts, events, pages] = await Promise.all([
       prisma.cause.findMany({ where: { status: 'PUBLISHED', OR: [{ title: c }, { summary: c }] }, select: { slug: true, title: true, summary: true, coverImage: true }, take: 5 }),
       prisma.campaign.findMany({ where: { status: { in: ['ACTIVE', 'COMPLETED'] }, OR: [{ title: c }, { summary: c }] }, select: { slug: true, title: true, summary: true, coverImage: true }, take: 5 }),

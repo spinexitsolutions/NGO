@@ -160,9 +160,11 @@ formsRouter.post(
     if (input.type === 'VOLUNTEER' && !event.volunteerSlots) throw AppError.badRequest('This event is not looking for volunteers');
 
     const token = randomToken(24);
-    // Serialisable transaction so two people can't take the last seat.
+    // Writing the event inside the transaction makes concurrent sign-ups for the same event conflict
+    // (one is rejected and can retry), so two people can't take the last seat.
     const registration = await prisma.$transaction(
       async (tx) => {
+        await tx.event.update({ where: { id: event.id }, data: { updatedAt: new Date() } });
         const existing = await tx.eventRegistration.findUnique({ where: { eventId_email_type: { eventId: event.id, email: input.email, type: input.type } } });
         if (existing && existing.status !== 'CANCELLED') throw AppError.conflict('You are already registered for this event');
         let status: 'CONFIRMED' | 'WAITLISTED' = 'CONFIRMED';
@@ -179,7 +181,6 @@ formsRouter.post(
           ? tx.eventRegistration.update({ where: { id: existing.id }, data })
           : tx.eventRegistration.create({ data: { ...data, reference: reference('EVT'), eventId: event.id, email: input.email, type: input.type } });
       },
-      { isolationLevel: 'Serializable' },
     );
     await sendTemplate({
       to: registration.email,
